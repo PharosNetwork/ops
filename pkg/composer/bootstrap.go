@@ -38,15 +38,15 @@ func (c *Composer) bootstrapLight() error {
 
 	// Initialize configuration
 	if err := c.initializeConf(lightInst); err != nil {
-		return fmt.Errorf("failed to initialize configuration: %w", err)
+		return err
 	}
 
 	// Generate genesis state
 	if err := c.generateGenesis(lightInst); err != nil {
-		return fmt.Errorf("failed to generate genesis: %w", err)
+		return err
 	}
 
-	utils.Info("Light mode bootstrap completed")
+	utils.Info("Bootstrap completed successfully")
 	return nil
 }
 
@@ -69,15 +69,12 @@ func (c *Composer) initializeConf(inst domain.Instance) error {
 		}
 	}
 
-	// Copy genesis configuration
-	genesisSource := c.domain.GenesisConf
-	if !filepath.IsAbs(genesisSource) {
-		genesisSource = filepath.Join(c.domainPath, genesisSource)
-	}
-
+	// Copy genesis configuration from current directory
+	genesisSource := "genesis.conf"
 	genesisTarget := filepath.Join(confDir, "genesis.conf")
 	if err := copyFile(genesisSource, genesisTarget); err != nil {
-		utils.Warn("Failed to copy genesis config: %v", err)
+		utils.Error("Failed to copy genesis config: %v", err)
+		return fmt.Errorf("failed to copy genesis config: %w", err)
 	}
 
 	utils.Info("Configuration initialized")
