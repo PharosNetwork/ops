@@ -70,22 +70,5 @@ type MygridEnvConfig struct {
 }
 
 const (
-	ServiceETCD       = "etcd"
-	ServiceStorage    = "mygrid_service"
-	ServicePortal     = "portal"
-	ServiceDog        = "dog"
-	ServiceTxpool     = "txpool"
-	ServiceController = "controller"
-	ServiceCompute    = "compute"
-	ServiceLight      = "light"
+	ServiceLight = "light"
 )
-
-var Services = []string{
-	ServiceETCD,
-	ServiceStorage,
-	ServicePortal,
-	ServiceDog,
-	ServiceTxpool,
-	ServiceController,
-	ServiceCompute,
-}

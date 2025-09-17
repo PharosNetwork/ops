@@ -72,76 +72,33 @@ func (c *Composer) Status(service string) error {
 }
 
 func (c *Composer) Start(service string) error {
-	utils.Info("Starting domain: %s", c.domain.DomainLabel)
+	utils.Info("Starting light node: %s", c.domain.DomainLabel)
 	
-	if c.isLight {
-		if service != "" && service != domain.ServiceLight {
-			return fmt.Errorf("light mode only supports light service")
-		}
-		return c.startService(domain.ServiceLight)
-	}
-
-	if service == "" {
-		for _, svc := range domain.Services {
-			if err := c.startService(svc); err != nil {
-				return fmt.Errorf("failed to start service %s: %w", svc, err)
-			}
-		}
-	} else {
-		return c.startService(service)
+	if service != "" && service != domain.ServiceLight {
+		return fmt.Errorf("only light service is supported")
 	}
 	
-	return nil
+	return c.startService(domain.ServiceLight)
 }
 
 func (c *Composer) Stop(service string) error {
-	utils.Info("Stopping domain: %s", c.domain.DomainLabel)
+	utils.Info("Stopping light node: %s", c.domain.DomainLabel)
 	
-	if c.isLight {
-		if service != "" && service != domain.ServiceLight {
-			return fmt.Errorf("light mode only supports light service")
-		}
-		return c.stopService(domain.ServiceLight)
-	}
-
-	if service == "" {
-		// Stop in reverse order
-		services := make([]string, len(domain.Services))
-		copy(services, domain.Services)
-		for i := len(services) - 1; i >= 0; i-- {
-			if err := c.stopService(services[i]); err != nil {
-				utils.Error("Failed to stop service %s: %v", services[i], err)
-			}
-		}
-	} else {
-		return c.stopService(service)
+	if service != "" && service != domain.ServiceLight {
+		return fmt.Errorf("only light service is supported")
 	}
 	
-	return nil
+	return c.stopService(domain.ServiceLight)
 }
 
 func (c *Composer) Clean(service string, cleanAll bool) error {
-	utils.Info("Cleaning domain: %s", c.domain.DomainLabel)
+	utils.Info("Cleaning light node: %s", c.domain.DomainLabel)
 	
-	if c.isLight {
-		return c.cleanInstance(domain.ServiceLight, cleanAll)
-	}
-
-	if service == "" {
-		services := domain.Services
-		if !cleanAll {
-			services = services[1:] // Skip etcd if not cleaning all
-		}
-		for _, svc := range services {
-			if err := c.cleanService(svc); err != nil {
-				utils.Error("Failed to clean service %s: %v", svc, err)
-			}
-		}
-	} else {
-		return c.cleanService(service)
+	if service != "" && service != domain.ServiceLight {
+		return fmt.Errorf("only light service is supported")
 	}
 	
-	return nil
+	return c.cleanInstance(domain.ServiceLight, cleanAll)
 }
 
 func (c *Composer) getInstances(service string) map[string][]domain.Instance {
@@ -285,12 +242,5 @@ func (c *Composer) cleanInstance(instanceName string, cleanMeta bool) error {
 }
 
 func (c *Composer) getBinaryName(service string) string {
-	switch service {
-	case domain.ServiceETCD:
-		return "etcd"
-	case domain.ServiceLight:
-		return "pharos"
-	default:
-		return "pharos"
-	}
+	return "pharos"
 }

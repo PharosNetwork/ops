@@ -1,13 +1,13 @@
 # Pharos Ops (Go Version)
 
-A Go rewrite of the Pharos blockchain operations tool, providing simplified and efficient management of Pharos networks.
+A Go rewrite of the Pharos blockchain operations tool, providing simplified and efficient management of Pharos light nodes.
 
 ## Features
 
 - **Simplified Architecture**: No separate deploy/distribution directories - current directory is the deployment directory
 - **Idempotent Operations**: All operations are safe to run multiple times
-- **Light & Ultra Mode Support**: Automatic detection and handling of deployment modes
-- **Service Management**: Start, stop, status, and clean operations for individual services or entire domains
+- **Light Mode Only**: Focused on light node deployment and management
+- **Node Management**: Start, stop, status, and clean operations for light nodes
 
 ## Installation
 
@@ -37,17 +37,17 @@ go build -o pharos-ops
 ./pharos-ops clean --all domain.json
 ```
 
-### Service-Specific Operations
+### Light Node Operations
 
 ```bash
-# Start specific service
-./pharos-ops start -s etcd domain.json
+# Start light node
+./pharos-ops start domain.json
 
-# Stop specific service
-./pharos-ops stop -s portal domain.json
+# Stop light node
+./pharos-ops stop domain.json
 
-# Check specific service status
-./pharos-ops status -s light domain.json
+# Check light node status
+./pharos-ops status domain.json
 ```
 
 ### Multiple Domains
@@ -72,13 +72,6 @@ go build -o pharos-ops
 - `pkg/composer/`: Core domain management logic  
 - `pkg/utils/`: Utility functions and logging
 
-## Supported Services
+## Supported Mode
 
-- `etcd`: Distributed key-value store
-- `mygrid_service`: Storage service
-- `portal`: API gateway
-- `dog`: Domain service
-- `txpool`: Transaction pool
-- `controller`: Network controller
-- `compute`: Computation service
-- `light`: Light client mode
+- `light`: Light client mode for lightweight blockchain operations

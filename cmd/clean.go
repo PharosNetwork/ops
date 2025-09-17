@@ -9,15 +9,14 @@ import (
 
 var cleanCmd = &cobra.Command{
 	Use:   "clean [domain_files...]",
-	Short: "Clean pharos domains",
-	Long:  "Clean pharos domain data and logs",
+	Short: "Clean pharos light nodes",
+	Long:  "Clean pharos light node data and logs",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		service, _ := cmd.Flags().GetString("service")
 		all, _ := cmd.Flags().GetBool("all")
 		
 		for _, domainFile := range args {
-			utils.Info("Cleaning domain: %s", domainFile)
+			utils.Info("Cleaning light node: %s", domainFile)
 			
 			c, err := composer.New(domainFile)
 			if err != nil {
@@ -25,8 +24,8 @@ var cleanCmd = &cobra.Command{
 				continue
 			}
 			
-			if err := c.Clean(service, all); err != nil {
-				utils.Error("Failed to clean domain: %v", err)
+			if err := c.Clean("", all); err != nil {
+				utils.Error("Failed to clean light node: %v", err)
 				continue
 			}
 		}
@@ -36,7 +35,6 @@ var cleanCmd = &cobra.Command{
 }
 
 func init() {
-	cleanCmd.Flags().StringP("service", "s", "", "Specific service to clean")
 	cleanCmd.Flags().Bool("all", false, "Clean all data including configuration")
 	rootCmd.AddCommand(cleanCmd)
 }

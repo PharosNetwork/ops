@@ -9,14 +9,12 @@ import (
 
 var restartCmd = &cobra.Command{
 	Use:   "restart [domain_files...]",
-	Short: "Restart pharos domains",
-	Long:  "Stop and start pharos domain services",
+	Short: "Restart pharos light nodes",
+	Long:  "Stop and start pharos light node domains",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		service, _ := cmd.Flags().GetString("service")
-		
 		for _, domainFile := range args {
-			utils.Info("Restarting domain: %s", domainFile)
+			utils.Info("Restarting light node: %s", domainFile)
 			
 			c, err := composer.New(domainFile)
 			if err != nil {
@@ -25,14 +23,14 @@ var restartCmd = &cobra.Command{
 			}
 			
 			// Stop first
-			if err := c.Stop(service); err != nil {
-				utils.Error("Failed to stop domain: %v", err)
+			if err := c.Stop(""); err != nil {
+				utils.Error("Failed to stop light node: %v", err)
 				continue
 			}
 			
 			// Then start
-			if err := c.Start(service); err != nil {
-				utils.Error("Failed to start domain: %v", err)
+			if err := c.Start(""); err != nil {
+				utils.Error("Failed to start light node: %v", err)
 				continue
 			}
 		}
@@ -42,6 +40,5 @@ var restartCmd = &cobra.Command{
 }
 
 func init() {
-	restartCmd.Flags().StringP("service", "s", "", "Specific service to restart")
 	rootCmd.AddCommand(restartCmd)
 }

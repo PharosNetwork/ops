@@ -9,14 +9,12 @@ import (
 
 var startCmd = &cobra.Command{
 	Use:   "start [domain_files...]",
-	Short: "Start pharos domains",
-	Long:  "Start pharos domain services",
+	Short: "Start pharos light nodes",
+	Long:  "Start pharos light node domains",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		service, _ := cmd.Flags().GetString("service")
-		
 		for _, domainFile := range args {
-			utils.Info("Starting domain: %s", domainFile)
+			utils.Info("Starting light node: %s", domainFile)
 			
 			c, err := composer.New(domainFile)
 			if err != nil {
@@ -24,8 +22,8 @@ var startCmd = &cobra.Command{
 				continue
 			}
 			
-			if err := c.Start(service); err != nil {
-				utils.Error("Failed to start domain: %v", err)
+			if err := c.Start(""); err != nil {
+				utils.Error("Failed to start light node: %v", err)
 				continue
 			}
 		}
@@ -35,6 +33,5 @@ var startCmd = &cobra.Command{
 }
 
 func init() {
-	startCmd.Flags().StringP("service", "s", "", "Specific service to start")
 	rootCmd.AddCommand(startCmd)
 }

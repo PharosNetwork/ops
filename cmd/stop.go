@@ -9,14 +9,12 @@ import (
 
 var stopCmd = &cobra.Command{
 	Use:   "stop [domain_files...]",
-	Short: "Stop pharos domains",
-	Long:  "Stop pharos domain services",
+	Short: "Stop pharos light nodes",
+	Long:  "Stop pharos light node domains",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		service, _ := cmd.Flags().GetString("service")
-		
 		for _, domainFile := range args {
-			utils.Info("Stopping domain: %s", domainFile)
+			utils.Info("Stopping light node: %s", domainFile)
 			
 			c, err := composer.New(domainFile)
 			if err != nil {
@@ -24,8 +22,8 @@ var stopCmd = &cobra.Command{
 				continue
 			}
 			
-			if err := c.Stop(service); err != nil {
-				utils.Error("Failed to stop domain: %v", err)
+			if err := c.Stop(""); err != nil {
+				utils.Error("Failed to stop light node: %v", err)
 				continue
 			}
 		}
@@ -35,6 +33,5 @@ var stopCmd = &cobra.Command{
 }
 
 func init() {
-	stopCmd.Flags().StringP("service", "s", "", "Specific service to stop")
 	rootCmd.AddCommand(stopCmd)
 }
