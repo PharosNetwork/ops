@@ -166,15 +166,7 @@ func (c *Composer) startInstance(inst domain.Instance) error {
 	binary := c.getBinaryName(inst.Service)
 	
 	// Create start command
-	var cmd *exec.Cmd
-	if inst.Service == domain.ServiceETCD {
-		cmd = exec.Command(binary)
-		for _, arg := range inst.Args {
-			cmd.Args = append(cmd.Args, arg)
-		}
-	} else {
-		cmd = exec.Command(binary, "-s", inst.Service, "-d")
-	}
+	cmd := exec.Command(binary, "-s", inst.Service, "-d")
 	
 	cmd.Dir = workDir
 	

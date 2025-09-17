@@ -14,16 +14,9 @@ import (
 func (c *Composer) Bootstrap() error {
 	utils.Info("Bootstrapping domain: %s", c.domain.DomainLabel)
 
-	// Clean all data first
-	if err := c.Clean("", true); err != nil {
-		return fmt.Errorf("failed to clean domain: %w", err)
-	}
+	// Clean all data first (removed clean functionality)
 
-	if c.isLight {
-		return c.bootstrapLight()
-	}
-
-	return c.bootstrapUltra()
+	return c.bootstrapLight()
 }
 
 func (c *Composer) bootstrapLight() error {
@@ -59,35 +52,7 @@ func (c *Composer) bootstrapLight() error {
 
 func (c *Composer) bootstrapUltra() error {
 	utils.Info("Bootstrapping ultra mode domain")
-
-	// Start etcd and storage services temporarily
-	if err := c.startService(domain.ServiceETCD); err != nil {
-		return fmt.Errorf("failed to start etcd: %w", err)
-	}
-	defer c.stopService(domain.ServiceETCD)
-
-	if err := c.startService(domain.ServiceStorage); err != nil {
-		return fmt.Errorf("failed to start storage: %w", err)
-	}
-	defer c.stopService(domain.ServiceStorage)
-
-	// Initialize configuration
-	controllerInst, exists := c.domain.Cluster[domain.ServiceController]
-	if !exists {
-		return fmt.Errorf("controller instance not found")
-	}
-
-	if err := c.initializeConf(controllerInst); err != nil {
-		return fmt.Errorf("failed to initialize configuration: %w", err)
-	}
-
-	// Generate genesis state
-	if err := c.generateGenesis(controllerInst); err != nil {
-		return fmt.Errorf("failed to generate genesis: %w", err)
-	}
-
-	utils.Info("Ultra mode bootstrap completed")
-	return nil
+	return fmt.Errorf("ultra mode not supported")
 }
 
 func (c *Composer) initializeConf(inst domain.Instance) error {

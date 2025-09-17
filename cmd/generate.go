@@ -30,7 +30,7 @@ var generateCmd = &cobra.Command{
 	Long:  "Generate individual domain configuration files from a deploy.json file",
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		deployFile := "deploy.json"
+		deployFile := "deploy.light.json"
 		if len(args) > 0 {
 			deployFile = args[0]
 		}

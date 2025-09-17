@@ -40,9 +40,9 @@ type CommonConfig struct {
 type MetricsConfig struct {
 	Enable       bool   `json:"enable"`
 	PushAddress  string `json:"push_address"`
-	PushPort     int    `json:"push_port"`
+	PushPort     string `json:"push_port"`
 	JobName      string `json:"job_name"`
-	PushInterval int    `json:"push_interval"`
+	PushInterval string `json:"push_interval"`
 }
 
 type SecretConfig struct {
