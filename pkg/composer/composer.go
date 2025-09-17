@@ -91,15 +91,7 @@ func (c *Composer) Stop(service string) error {
 	return c.stopService(domain.ServiceLight)
 }
 
-func (c *Composer) Clean(service string, cleanAll bool) error {
-	utils.Info("Cleaning light node: %s", c.domain.DomainLabel)
-	
-	if service != "" && service != domain.ServiceLight {
-		return fmt.Errorf("only light service is supported")
-	}
-	
-	return c.cleanInstance(domain.ServiceLight, cleanAll)
-}
+
 
 func (c *Composer) getInstances(service string) map[string][]domain.Instance {
 	instances := make(map[string][]domain.Instance)
@@ -165,20 +157,7 @@ func (c *Composer) stopService(service string) error {
 	return nil
 }
 
-func (c *Composer) cleanService(service string) error {
-	utils.Info("Cleaning service: %s", service)
-	
-	instances := c.getInstances(service)
-	for _, insts := range instances {
-		for _, inst := range insts {
-			if err := c.cleanInstance(inst.Name, true); err != nil {
-				utils.Error("Failed to clean instance %s: %v", inst.Name, err)
-			}
-		}
-	}
-	
-	return nil
-}
+
 
 func (c *Composer) startInstance(inst domain.Instance) error {
 	utils.Info("Starting instance: %s", inst.Name)
@@ -216,30 +195,7 @@ func (c *Composer) stopInstance(inst domain.Instance) error {
 	return cmd.Run()
 }
 
-func (c *Composer) cleanInstance(instanceName string, cleanMeta bool) error {
-	utils.Info("Cleaning instance: %s", instanceName)
-	
-	inst, exists := c.domain.Cluster[instanceName]
-	if !exists {
-		return fmt.Errorf("instance %s not found", instanceName)
-	}
-	
-	// Clean data directory
-	if cleanMeta {
-		dataDir := filepath.Join(inst.Dir, "data")
-		if err := os.RemoveAll(dataDir); err != nil && !os.IsNotExist(err) {
-			utils.Error("Failed to clean data dir %s: %v", dataDir, err)
-		}
-	}
-	
-	// Clean log directory
-	logDir := filepath.Join(inst.Dir, "log")
-	if err := os.RemoveAll(logDir); err != nil && !os.IsNotExist(err) {
-		utils.Error("Failed to clean log dir %s: %v", logDir, err)
-	}
-	
-	return nil
-}
+
 
 func (c *Composer) getBinaryName(service string) string {
 	return "pharos"

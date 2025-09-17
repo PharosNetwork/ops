@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"pharos-ops/pkg/composer"
 	"pharos-ops/pkg/utils"
 
@@ -8,27 +9,20 @@ import (
 )
 
 var statusCmd = &cobra.Command{
-	Use:   "status [domain_files...]",
-	Short: "Check status of pharos light nodes",
-	Long:  "Check the running status of pharos light node domains",
-	Args:  cobra.MinimumNArgs(1),
+	Use:   "status <domain.json>",
+	Short: "Check status of pharos node",
+	Long:  "Check the running status of pharos node",
+	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		for _, domainFile := range args {
-			utils.Info("Checking status for light node: %s", domainFile)
-			
-			c, err := composer.New(domainFile)
-			if err != nil {
-				utils.Error("Failed to load domain file %s: %v", domainFile, err)
-				continue
-			}
-			
-			if err := c.Status(""); err != nil {
-				utils.Error("Failed to check status: %v", err)
-				continue
-			}
+		domainFile := args[0]
+		utils.Info("Checking status for node: %s", domainFile)
+		
+		c, err := composer.New(domainFile)
+		if err != nil {
+			return fmt.Errorf("failed to load domain file: %w", err)
 		}
 		
-		return nil
+		return c.Status("")
 	},
 }
 

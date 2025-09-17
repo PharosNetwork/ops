@@ -1,13 +1,13 @@
 # Pharos Ops (Go Version)
 
-A Go rewrite of the Pharos blockchain operations tool, providing simplified and efficient management of Pharos light nodes.
+A Go rewrite of the Pharos blockchain operations tool, providing simplified node management.
 
 ## Features
 
 - **Simplified Architecture**: No separate deploy/distribution directories - current directory is the deployment directory
 - **Idempotent Operations**: All operations are safe to run multiple times
-- **Light Mode Only**: Focused on light node deployment and management
-- **Node Management**: Start, stop, status, and clean operations for light nodes
+- **Single Domain**: Focused on single domain.json management
+- **Compatible**: Generates NODE_ID using the same SHA256 hash algorithm as Python version
 
 ## Installation
 
@@ -18,43 +18,33 @@ go build -o pharos-ops
 
 ## Usage
 
-### Basic Commands
+### Configuration
 
 ```bash
-# Check status
-./pharos-ops status domain.json
+# Generate domain.json from deploy.json
+./pharos-ops generate deploy.json
 
-# Start domain
-./pharos-ops start domain.json
+# Set IP addresses in domain.json
+./pharos-ops set-ip domain.json
 
-# Stop domain  
-./pharos-ops stop domain.json
-
-# Clean domain data
-./pharos-ops clean domain.json
-
-# Clean all data including config
-./pharos-ops clean --all domain.json
+# Bootstrap node configuration
+./pharos-ops bootstrap domain.json
 ```
 
-### Light Node Operations
+### Node Operations
 
 ```bash
-# Start light node
+# Start node
 ./pharos-ops start domain.json
 
-# Stop light node
+# Stop node
 ./pharos-ops stop domain.json
 
-# Check light node status
+# Restart node
+./pharos-ops restart domain.json
+
+# Check node status
 ./pharos-ops status domain.json
-```
-
-### Multiple Domains
-
-```bash
-# Operate on multiple domains
-./pharos-ops start domain1.json domain2.json domain3.json
 ```
 
 ## Key Differences from Python Version

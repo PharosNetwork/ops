@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"pharos-ops/pkg/composer"
 	"pharos-ops/pkg/utils"
 
@@ -8,27 +9,20 @@ import (
 )
 
 var startCmd = &cobra.Command{
-	Use:   "start [domain_files...]",
-	Short: "Start pharos light nodes",
-	Long:  "Start pharos light node domains",
-	Args:  cobra.MinimumNArgs(1),
+	Use:   "start <domain.json>",
+	Short: "Start pharos node",
+	Long:  "Start pharos node from domain configuration",
+	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		for _, domainFile := range args {
-			utils.Info("Starting light node: %s", domainFile)
-			
-			c, err := composer.New(domainFile)
-			if err != nil {
-				utils.Error("Failed to load domain file %s: %v", domainFile, err)
-				continue
-			}
-			
-			if err := c.Start(""); err != nil {
-				utils.Error("Failed to start light node: %v", err)
-				continue
-			}
+		domainFile := args[0]
+		utils.Info("Starting node: %s", domainFile)
+		
+		c, err := composer.New(domainFile)
+		if err != nil {
+			return fmt.Errorf("failed to load domain file: %w", err)
 		}
 		
-		return nil
+		return c.Start("")
 	},
 }
 

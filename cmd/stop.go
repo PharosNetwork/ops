@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"pharos-ops/pkg/composer"
 	"pharos-ops/pkg/utils"
 
@@ -8,27 +9,20 @@ import (
 )
 
 var stopCmd = &cobra.Command{
-	Use:   "stop [domain_files...]",
-	Short: "Stop pharos light nodes",
-	Long:  "Stop pharos light node domains",
-	Args:  cobra.MinimumNArgs(1),
+	Use:   "stop <domain.json>",
+	Short: "Stop pharos node",
+	Long:  "Stop pharos node from domain configuration",
+	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		for _, domainFile := range args {
-			utils.Info("Stopping light node: %s", domainFile)
-			
-			c, err := composer.New(domainFile)
-			if err != nil {
-				utils.Error("Failed to load domain file %s: %v", domainFile, err)
-				continue
-			}
-			
-			if err := c.Stop(""); err != nil {
-				utils.Error("Failed to stop light node: %v", err)
-				continue
-			}
+		domainFile := args[0]
+		utils.Info("Stopping node: %s", domainFile)
+		
+		c, err := composer.New(domainFile)
+		if err != nil {
+			return fmt.Errorf("failed to load domain file: %w", err)
 		}
 		
-		return nil
+		return c.Stop("")
 	},
 }
 
