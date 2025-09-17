@@ -58,23 +58,11 @@ func (c *Composer) bootstrapUltra() error {
 func (c *Composer) initializeConf(inst domain.Instance) error {
 	utils.Info("Initializing configuration for instance: %s", inst.Name)
 
-	// Create client directory structure
-	clientDir := filepath.Join(".", "client")
-	binDir := filepath.Join(clientDir, "bin")
-	confDir := filepath.Join(clientDir, "conf")
-
-	for _, dir := range []string{binDir, confDir} {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return fmt.Errorf("failed to create directory %s: %w", dir, err)
-		}
-	}
-
-	// Copy genesis configuration from current directory
+	// Check if genesis.conf exists in current directory
 	genesisSource := "genesis.conf"
-	genesisTarget := filepath.Join(confDir, "genesis.conf")
-	if err := copyFile(genesisSource, genesisTarget); err != nil {
-		utils.Error("Failed to copy genesis config: %v", err)
-		return fmt.Errorf("failed to copy genesis config: %w", err)
+	if _, err := os.Stat(genesisSource); os.IsNotExist(err) {
+		utils.Error("genesis.conf not found in current directory")
+		return fmt.Errorf("genesis.conf not found in current directory")
 	}
 
 	utils.Info("Configuration initialized")
@@ -84,19 +72,19 @@ func (c *Composer) initializeConf(inst domain.Instance) error {
 func (c *Composer) generateGenesis(inst domain.Instance) error {
 	utils.Info("Generating genesis state for instance: %s", inst.Name)
 
-	clientBinDir := filepath.Join(".", "client", "bin")
-	genesisConf := filepath.Join(".", "client", "conf", "genesis.conf")
-
-	// Check if pharos_cli exists
-	pharosCli := filepath.Join(clientBinDir, "pharos_cli")
+	// Check if pharos_cli exists in bin directory
+	pharosCli := filepath.Join("bin", "pharos_cli")
 	if _, err := os.Stat(pharosCli); os.IsNotExist(err) {
-		utils.Warn("pharos_cli not found at %s, skipping genesis generation", pharosCli)
-		return nil
+		utils.Error("pharos_cli not found at %s", pharosCli)
+		return fmt.Errorf("pharos_cli not found at %s", pharosCli)
 	}
+
+	// Use genesis.conf from current directory
+	genesisConf := "genesis.conf"
 
 	// Generate genesis command
 	cmd := exec.Command(pharosCli, "genesis", "-g", genesisConf, "--spec", "0")
-	cmd.Dir = clientBinDir
+	cmd.Dir = "bin"
 
 	// Set environment variables
 	cmd.Env = os.Environ()

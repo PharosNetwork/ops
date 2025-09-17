@@ -1,5 +1,4 @@
 # Binaries
-pharos-ops
 build/
 *.exe
 *.exe~
