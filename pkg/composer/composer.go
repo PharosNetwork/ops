@@ -1,0 +1,296 @@
+package composer
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+
+	"pharos-ops/pkg/domain"
+	"pharos-ops/pkg/utils"
+)
+
+type Composer struct {
+	domain     *domain.Domain
+	domainPath string
+	isLight    bool
+}
+
+func New(domainFile string) (*Composer, error) {
+	absPath, err := filepath.Abs(domainFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get absolute path: %w", err)
+	}
+
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read domain file: %w", err)
+	}
+
+	var d domain.Domain
+	if err := json.Unmarshal(data, &d); err != nil {
+		return nil, fmt.Errorf("failed to parse domain file: %w", err)
+	}
+
+	c := &Composer{
+		domain:     &d,
+		domainPath: filepath.Dir(absPath),
+		isLight:    false,
+	}
+
+	// Check if light mode
+	if _, exists := d.Cluster[domain.ServiceLight]; exists {
+		c.isLight = true
+	}
+
+	return c, nil
+}
+
+func (c *Composer) IsLight() bool {
+	return c.isLight
+}
+
+func (c *Composer) Domain() *domain.Domain {
+	return c.domain
+}
+
+func (c *Composer) Status(service string) error {
+	utils.Info("Checking status for domain: %s", c.domain.DomainLabel)
+	
+	instances := c.getInstances(service)
+	for host, insts := range instances {
+		utils.Info("Host: %s", host)
+		for _, inst := range insts {
+			if err := c.statusInstance(inst); err != nil {
+				utils.Error("Failed to check status for %s: %v", inst.Name, err)
+			}
+		}
+	}
+	return nil
+}
+
+func (c *Composer) Start(service string) error {
+	utils.Info("Starting domain: %s", c.domain.DomainLabel)
+	
+	if c.isLight {
+		if service != "" && service != domain.ServiceLight {
+			return fmt.Errorf("light mode only supports light service")
+		}
+		return c.startService(domain.ServiceLight)
+	}
+
+	if service == "" {
+		for _, svc := range domain.Services {
+			if err := c.startService(svc); err != nil {
+				return fmt.Errorf("failed to start service %s: %w", svc, err)
+			}
+		}
+	} else {
+		return c.startService(service)
+	}
+	
+	return nil
+}
+
+func (c *Composer) Stop(service string) error {
+	utils.Info("Stopping domain: %s", c.domain.DomainLabel)
+	
+	if c.isLight {
+		if service != "" && service != domain.ServiceLight {
+			return fmt.Errorf("light mode only supports light service")
+		}
+		return c.stopService(domain.ServiceLight)
+	}
+
+	if service == "" {
+		// Stop in reverse order
+		services := make([]string, len(domain.Services))
+		copy(services, domain.Services)
+		for i := len(services) - 1; i >= 0; i-- {
+			if err := c.stopService(services[i]); err != nil {
+				utils.Error("Failed to stop service %s: %v", services[i], err)
+			}
+		}
+	} else {
+		return c.stopService(service)
+	}
+	
+	return nil
+}
+
+func (c *Composer) Clean(service string, cleanAll bool) error {
+	utils.Info("Cleaning domain: %s", c.domain.DomainLabel)
+	
+	if c.isLight {
+		return c.cleanInstance(domain.ServiceLight, cleanAll)
+	}
+
+	if service == "" {
+		services := domain.Services
+		if !cleanAll {
+			services = services[1:] // Skip etcd if not cleaning all
+		}
+		for _, svc := range services {
+			if err := c.cleanService(svc); err != nil {
+				utils.Error("Failed to clean service %s: %v", svc, err)
+			}
+		}
+	} else {
+		return c.cleanService(service)
+	}
+	
+	return nil
+}
+
+func (c *Composer) getInstances(service string) map[string][]domain.Instance {
+	instances := make(map[string][]domain.Instance)
+	
+	for _, inst := range c.domain.Cluster {
+		if service == "" || inst.Service == service {
+			host := inst.Host
+			if host == "" {
+				host = inst.IP
+			}
+			instances[host] = append(instances[host], inst)
+		}
+	}
+	
+	return instances
+}
+
+func (c *Composer) statusInstance(inst domain.Instance) error {
+	// Check if process is running
+	cmd := exec.Command("pgrep", "-f", inst.Service)
+	output, err := cmd.Output()
+	if err != nil {
+		utils.Info("  %s: STOPPED", inst.Name)
+		return nil
+	}
+	
+	if len(strings.TrimSpace(string(output))) > 0 {
+		utils.Info("  %s: RUNNING", inst.Name)
+	} else {
+		utils.Info("  %s: STOPPED", inst.Name)
+	}
+	
+	return nil
+}
+
+func (c *Composer) startService(service string) error {
+	utils.Info("Starting service: %s", service)
+	
+	instances := c.getInstances(service)
+	for host, insts := range instances {
+		for _, inst := range insts {
+			if err := c.startInstance(inst); err != nil {
+				return fmt.Errorf("failed to start instance %s on %s: %w", inst.Name, host, err)
+			}
+		}
+	}
+	
+	return nil
+}
+
+func (c *Composer) stopService(service string) error {
+	utils.Info("Stopping service: %s", service)
+	
+	instances := c.getInstances(service)
+	for host, insts := range instances {
+		for _, inst := range insts {
+			if err := c.stopInstance(inst); err != nil {
+				utils.Error("Failed to stop instance %s on %s: %v", inst.Name, host, err)
+			}
+		}
+	}
+	
+	return nil
+}
+
+func (c *Composer) cleanService(service string) error {
+	utils.Info("Cleaning service: %s", service)
+	
+	instances := c.getInstances(service)
+	for _, insts := range instances {
+		for _, inst := range insts {
+			if err := c.cleanInstance(inst.Name, true); err != nil {
+				utils.Error("Failed to clean instance %s: %v", inst.Name, err)
+			}
+		}
+	}
+	
+	return nil
+}
+
+func (c *Composer) startInstance(inst domain.Instance) error {
+	utils.Info("Starting instance: %s", inst.Name)
+	
+	workDir := filepath.Join(inst.Dir, "bin")
+	binary := c.getBinaryName(inst.Service)
+	
+	// Create start command
+	var cmd *exec.Cmd
+	if inst.Service == domain.ServiceETCD {
+		cmd = exec.Command(binary)
+		for _, arg := range inst.Args {
+			cmd.Args = append(cmd.Args, arg)
+		}
+	} else {
+		cmd = exec.Command(binary, "-s", inst.Service, "-d")
+	}
+	
+	cmd.Dir = workDir
+	
+	// Set environment variables
+	cmd.Env = os.Environ()
+	for k, v := range inst.Env {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
+	}
+	
+	return cmd.Start()
+}
+
+func (c *Composer) stopInstance(inst domain.Instance) error {
+	utils.Info("Stopping instance: %s", inst.Name)
+	
+	// Find and kill process
+	cmd := exec.Command("pkill", "-f", inst.Service)
+	return cmd.Run()
+}
+
+func (c *Composer) cleanInstance(instanceName string, cleanMeta bool) error {
+	utils.Info("Cleaning instance: %s", instanceName)
+	
+	inst, exists := c.domain.Cluster[instanceName]
+	if !exists {
+		return fmt.Errorf("instance %s not found", instanceName)
+	}
+	
+	// Clean data directory
+	if cleanMeta {
+		dataDir := filepath.Join(inst.Dir, "data")
+		if err := os.RemoveAll(dataDir); err != nil && !os.IsNotExist(err) {
+			utils.Error("Failed to clean data dir %s: %v", dataDir, err)
+		}
+	}
+	
+	// Clean log directory
+	logDir := filepath.Join(inst.Dir, "log")
+	if err := os.RemoveAll(logDir); err != nil && !os.IsNotExist(err) {
+		utils.Error("Failed to clean log dir %s: %v", logDir, err)
+	}
+	
+	return nil
+}
+
+func (c *Composer) getBinaryName(service string) string {
+	switch service {
+	case domain.ServiceETCD:
+		return "etcd"
+	case domain.ServiceLight:
+		return "pharos"
+	default:
+		return "pharos"
+	}
+}
