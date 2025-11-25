@@ -24,6 +24,7 @@ type Domain struct {
 	Version            string              `json:"version"`
 	RunUser            string              `json:"run_user"`
 	DeployDir          string              `json:"deploy_dir"`
+	AdminAddr          string              `json:"admin_addr"`
 	GenesisConf        string              `json:"genesis_conf"` // default: ../conf/genesis.conf
 	Mygrid             MygridConfig        `json:"mygrid"`
 	Secret             Secret              `json:"secret"`
@@ -356,6 +357,25 @@ func GeneratePrivateKey(keyType string, keyDir, keyFile, keyPasswd string, build
 	return nil
 }
 
+func replaceInFile(filePath string, oldStr string, newStr string) error {
+	path, err := filepath.Abs(filePath)
+	if err != nil {
+		return err
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("failed to read file: %s", err)
+	}
+
+	// 替换内容
+	newContent := strings.ReplaceAll(string(content), oldStr, newStr)
+	if err := os.WriteFile(path, []byte(newContent), 0644); err != nil {
+		return fmt.Errorf("failed to write updated content to file: %s", err)
+	}
+
+	return nil
+}
+
 func padChunk(chunk []byte, length int) []byte {
 	padded := make([]byte, length)
 	copy(padded, chunk)
@@ -477,7 +497,17 @@ func intToBigEndian(value int) []byte {
 	return buf.Bytes()
 }
 
-func GenerateDomainSlots(totalDomains int, domainIndex int, publicKey string, blsPubkey string, endpoint string, stake int, adminAddr string) map[string]string {
+func bigIntToBigEndian(value *big.Int) []byte {
+	// 将大整数值转换为字节切片
+	bytesValue := value.Bytes()
+
+	// 创建一个字节缓冲区，并写入到固定长度（32字节）的字节切片中
+	buf := make([]byte, 32)                    // 32字节的缓冲区
+	copy(buf[32-len(bytesValue):], bytesValue) // 以大端顺序填充
+	return buf
+}
+
+func GenerateDomainSlots(totalDomains int, domainIndex int, publicKey string, blsPubkey string, endpoint string, stake *big.Int, adminAddr string) map[string]string {
 	slots := make(map[string]string)
 
 	// Remove '0x' prefix if present
@@ -589,7 +619,7 @@ func GenerateDomainSlots(totalDomains int, domainIndex int, publicKey string, bl
 	// 8. for `Validator.totalStake`
 	validatorStakeBaseSlot := 8
 	validatorPoolIDMapBaseSlot = bytesAddNum(validatorsMapValidatorSlot, validatorStakeBaseSlot)
-	stakeBytes := intToBigEndian(stake)
+	stakeBytes := bigIntToBigEndian(stake)
 	stakeBytes = padTo32Bytes(stakeBytes)
 	slots["0x"+hex.EncodeToString(validatorPoolIDMapBaseSlot)] = "0x" + hex.EncodeToString(stakeBytes)
 
@@ -605,7 +635,7 @@ func GenerateDomainSlots(totalDomains int, domainIndex int, publicKey string, bl
 
 	validatorOwnerBaseSlot = 10
 	validatorPoolIDMapBaseSlot = bytesAddNum(validatorsMapValidatorSlot, validatorOwnerBaseSlot)
-	snapshotStakeBytes := intToBigEndian(stake)
+	snapshotStakeBytes := bigIntToBigEndian(stake)
 	snapshotStakeBytes = padTo32Bytes(snapshotStakeBytes)
 	slots["0x"+hex.EncodeToString(validatorPoolIDMapBaseSlot)] = "0x" + hex.EncodeToString(snapshotStakeBytes)
 
@@ -762,7 +792,28 @@ func NewDefaultDeploy() *Deploy {
 	}
 }
 
-func GenerateDomain(deployFilePath string) (*Domain, error) {
+func GenerateDomain(deployFilePath string) error {
+	domain, err := generateDomain(deployFilePath)
+	if err != nil {
+		return err
+	}
+	domainPath, err := filepath.Abs("domain0.json")
+	if err != nil {
+		return err
+	}
+	file, err := os.Create(domainPath)
+	if err != nil {
+		return fmt.Errorf("failed to create file: %s", err)
+	}
+	defer file.Close()
+
+	if err := json.NewEncoder(file).Encode(domain); err != nil {
+		return fmt.Errorf("failed to write JSON data: %s", err)
+	}
+	return nil
+}
+
+func generateDomain(deployFilePath string) (*Domain, error) {
 	data, err := os.ReadFile(deployFilePath)
 	if err != nil {
 		return nil, err
@@ -817,7 +868,7 @@ func GenerateDomain(deployFilePath string) (*Domain, error) {
 		}
 		GeneratePrivateKey(deploy.DomainKeyType, keyDir, keyFile, domain.KeyPasswd, "")
 		GeneratePrivateKey("bls12381", stabilizingKeyDir, keyFile, domain.KeyPasswd, deploy.DeployRoot)
-
+		domain.AdminAddr = deploy.AdminAddr
 		domain.Secret.Domain.Files["key"] = keyDir + "/" + keyFile
 		domain.Secret.Domain.Files["key_pub"] = keyDir + "/" + pkeyFile
 		domain.Secret.Domain.Files["stabilizing_key"] = stabilizingKeyDir + "/" + keyFile
@@ -866,6 +917,100 @@ func GenerateDomain(deployFilePath string) (*Domain, error) {
 	return domain, nil
 }
 
-func GenerateGenesis(domain *Domain) error {
+func GenerateGenesis(deployFilePath string, domain *Domain) error {
+	spk, err := os.ReadFile(domain.Secret.Domain.Files["stabilizing_key"])
+	if err != nil {
+		return err
+	}
+	pk, err := os.ReadFile(domain.Secret.Domain.Files["key_pub"])
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(deployFilePath)
+	if err != nil {
+		return err
+	}
+	deploy := NewDefaultDeploy()
+	if err = json.Unmarshal(data, deploy); err != nil {
+		return fmt.Errorf("invalid json format for deploy.light.json: %v", err)
+	}
+	genesis := make(map[string]interface{})
+	tpl, err := os.ReadFile(deploy.GenesisTpl)
+	if err != nil {
+		return err
+	}
+	if err = json.Unmarshal(tpl, &genesis); err != nil {
+		return fmt.Errorf("invalid json format for genesis.tpl: %v", err)
+	}
+	genesisDomain := make(map[string]string)
+	genesisDomain["pubkey"] = string(pk)
+	genesisDomain["stabilizing_pubkey"] = string(spk)
+	genesisDomain["owner"] = "root"
+	genesisDomain["endpoints"] = domain.Cluster["light"].Env["LIGHT_RPC_ADVERTISE_URL"]
+	genesisDomain["staking"] = "200000000"
+	genesisDomain["commission_rate"] = "10"
+	genesisDomain["node_id"] = domain.Cluster["light"].Env["NODE_ID"]
+	genesis["domains"] = genesisDomain
+	weiAmount := big.NewInt(int64(domain.InitialStakeInGwei)).Mul(big.NewInt(int64(domain.InitialStakeInGwei)), big.NewInt(int64(1000000000)))
+	storageSlotKvs := GenerateDomainSlots(1, 0, string(pk), string(spk), domain.Cluster["light"].Env["LIGHT_RPC_ADVERTISE_URL"], weiAmount, domain.AdminAddr)
+	epochBaseSlot := 5
+	epochBaseSlotBytes := toBytes(epochBaseSlot)
+	epochNum := 0
+	epochNumBytes := toBytes(epochNum)
+	storageSlotKvs["0x"+hex.EncodeToString(epochBaseSlotBytes)] = "0x" + hex.EncodeToString(epochNumBytes)
+	totalStakeBaseSlot := 6
+	totalStakeBaseSlotBytes := toBytes(totalStakeBaseSlot)
+	totalStakeBytes := bigIntToBigEndian(weiAmount)
+	storageSlotKvs["0x"+hex.EncodeToString(totalStakeBaseSlotBytes)] = "0x" + hex.EncodeToString(totalStakeBytes)
+	sysStakingAddr := "4100000000000000000000000000000000000000"
+	sysStaking := make(map[string]interface{})
+	sysStaking["storage"] = storageSlotKvs
+	sysStaking["balance"] = hex.EncodeToString(totalStakeBytes)
+	alloc := make(map[string]interface{})
+	alloc[sysStakingAddr] = sysStaking
+
+	sysChainCfgAddr := "3100000000000000000000000000000000000000"
+	chainCfgSlotKvs := GenerateChaincfgSlots(genesis["configs"].(map[string]string), deploy.AdminAddr)
+	chainCfg := make(map[string]interface{})
+	chainCfg["storage"] = chainCfgSlotKvs
+	alloc[sysChainCfgAddr] = chainCfg
+
+	sysRuleMngAddr := "2100000000000000000000000000000000000000"
+	mngStorageSlotKvs := GenerateRuleMngSlots(storageSlotKvs, deploy.AdminAddr)
+	sysRuleMng := make(map[string]interface{})
+	sysRuleMng["storage"] = mngStorageSlotKvs
+	alloc[sysRuleMngAddr] = sysRuleMng
+	genesis["alloc"] = alloc
+
+	genesisPath, err := filepath.Abs(domain.GenesisConf)
+	if err != nil {
+		return err
+	}
+	file, err := os.Create(genesisPath)
+	if err != nil {
+		return fmt.Errorf("failed to create file: %s", err)
+	}
+	defer file.Close()
+
+	if err := json.NewEncoder(file).Encode(genesis); err != nil {
+		return fmt.Errorf("failed to write JSON data: %s", err)
+	}
+
+	// 获取admin_addr和proxy_admin_addr
+	confAdminAddr := strings.TrimPrefix(deploy.AdminAddr, "0x")
+	confProxyAdminAddr := strings.TrimPrefix(deploy.ProxyAdminAddr, "0x")
+
+	// 默认地址
+	defaultAdminAddr := "2cc298bdee7cfeac9b49f9659e2f3d637e149696"
+	defaultProxyAdminAddr := "0278872d3f68b15156e486da1551bcd34493220d"
+
+	// 替换文件内容
+	if err := replaceInFile(genesisPath, defaultAdminAddr, confAdminAddr); err != nil {
+		return err
+	}
+	if err := replaceInFile(genesisPath, defaultProxyAdminAddr, confProxyAdminAddr); err != nil {
+		return err
+	}
+
 	return nil
 }
