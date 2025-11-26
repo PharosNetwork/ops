@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -164,6 +165,12 @@ type GenesisDomain struct {
 	Staking           string `json:"staking"`
 	CommissionRate    string `json:"commission_rate"`
 	NodeID            string `json:"node_id"`
+}
+
+func pspidGrep(s string, cmds ...string) string {
+	commands := []string{"ps -eo pid,cmd", fmt.Sprintf("grep '%s'", s)}
+	commands = append(commands, cmds...)
+	return strings.Join(commands, " | ")
 }
 
 func GenerateNodeID(pk string) string {
@@ -1012,5 +1019,136 @@ func GenerateGenesis(deployFilePath string, domain *Domain) error {
 		return err
 	}
 
+	return nil
+}
+
+func InitializeConf(domain *Domain) error {
+	cliBinDir := domain.DeployDir + "/client/bin/"
+
+	jsonFiles := map[string]string{
+		fmt.Sprintf("/%s/global/config", domain.ChainID):              domain.BuildRoot + "/conf/global.conf",
+		fmt.Sprintf("/%s/services/portal/config", domain.ChainID):     domain.BuildRoot + "/conf/portal.conf",
+		fmt.Sprintf("/%s/services/dog/config", domain.ChainID):        domain.BuildRoot + "/conf/dog.conf",
+		fmt.Sprintf("/%s/services/txpool/config", domain.ChainID):     domain.BuildRoot + "/conf/txpool.conf",
+		fmt.Sprintf("/%s/services/controller/config", domain.ChainID): domain.BuildRoot + "/conf/controller.conf",
+		fmt.Sprintf("/%s/services/compute/config", domain.ChainID):    domain.BuildRoot + "/conf/compute.conf",
+	}
+
+	for key, file := range jsonFiles {
+		fmt.Printf("Setting %s\n", key)
+
+		fileContent, err := os.ReadFile((file))
+		if err != nil {
+			return err
+		}
+
+		// Using the command to set the configuration in etcd
+		cmd := fmt.Sprintf("cd %s; ./meta_tool -conf %s -set -key=%s -value='%s'",
+			cliBinDir,
+			"const.META_SERVICE_CONFIG_FILENAME", // Replace with actual constant
+			key,
+			fileContent,
+		)
+
+		if _, err := exec.Command("bash", "-c", cmd).CombinedOutput(); err != nil {
+			return err
+		}
+	}
+
+	// Handling secrets
+	confs := map[string]interface{}{
+		fmt.Sprintf("/%s/secrets/domain.key", domain.ChainID): map[string]string{
+			"domain_key":      base64.StdEncoding.EncodeToString([]byte(domain.Secret.Domain.Files["key"])),
+			"stabilizing_key": base64.StdEncoding.EncodeToString([]byte(domain.Secret.Domain.Files["key"])),
+		},
+	}
+
+	for name, instance := range domain.Cluster {
+		if len(instance.Log) > 0 || len(instance.Config) > 0 {
+			confs[fmt.Sprintf("/%s/services/%s/instance_config/%s", domain.ChainID, instance.Service, name)] = map[string]interface{}{
+				"log":        instance.Log,
+				"parameters": map[string]interface{}{fmt.Sprintf("/GlobalFlag/%s", instance.Gflags): instance.Gflags},
+				"config":     instance.Config,
+			}
+		}
+	}
+
+	for key, value := range confs {
+		fmt.Printf("Setting %s\n", key)
+
+		valueJSON, _ := json.Marshal(value) // Convert to JSON
+		cmd := fmt.Sprintf("cd %s; ./meta_tool -conf %s -set -key=%s -value='%s'",
+			cliBinDir,
+			"const.META_SERVICE_CONFIG_FILENAME", // Replace with actual constant
+			key,
+			valueJSON,
+		)
+
+		if _, err := exec.Command("bash", "-c", cmd).CombinedOutput(); err != nil {
+			return err
+		}
+	}
+
+	// TODO: Save domain files to etcd
+
+	return nil
+}
+
+func BootStrap(domainPath string) error {
+	data, err := os.ReadFile(domainPath)
+	if err != nil {
+		return err
+	}
+	domain := NewDefaultDomain()
+	if err = json.Unmarshal(data, domain); err != nil {
+		return fmt.Errorf("invalid json format for domain0.json: %v", err)
+	}
+	err = InitializeConf(domain)
+	if err != nil {
+		return err
+	}
+	cliBinDir := domain.DeployDir + "/client/bin/"
+	command := "cd " + cliBinDir + "; LD_PRELOAD=./libevmone.so ./aldaba_cli genesis -g ../conf/genesis.conf -s mygrid_genesis.conf'"
+	if _, err := exec.Command("bash", "-c", command).CombinedOutput(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func Start(domainPath string) error {
+	data, err := os.ReadFile(domainPath)
+	if err != nil {
+		return err
+	}
+	domain := NewDefaultDomain()
+	if err = json.Unmarshal(data, domain); err != nil {
+		return fmt.Errorf("invalid json format for domain0.json: %v", err)
+	}
+	cmd := "cd " + domain.DeployDir + "/light/bin" + "; LD_PRELOAD=./libevmone.so ./aldaba_light -c ../conf/launch.conf -d"
+	if _, err := exec.Command("bash", "-c", cmd).CombinedOutput(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func Stop(domainPath string) error {
+	data, err := os.ReadFile(domainPath)
+	if err != nil {
+		return err
+	}
+	domain := NewDefaultDomain()
+	if err = json.Unmarshal(data, domain); err != nil {
+		return fmt.Errorf("invalid json format for domain0.json: %v", err)
+	}
+	cmd := pspidGrep("aldaba_light",
+		"awk '{system(\"pwdx \"$1\" 2>&1\")}'",
+		"grep -v MATCH_MATCH",
+		fmt.Sprintf(`sed "s#%s#MATCH_MATCH#g"`, domain.DeployDir+"/light/bin"),
+		"grep MATCH_MATCH",
+		"awk -F: '{system(\"kill -15 \"$1\" 2>&1\")}'",
+	)
+	if _, err := exec.Command("bash", "-c", cmd).CombinedOutput(); err != nil {
+		return err
+	}
 	return nil
 }
