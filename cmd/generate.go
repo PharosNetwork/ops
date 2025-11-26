@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,18 +10,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type DeployConfig struct {
-	Domains map[string]DomainConfig `json:"domains"`
-}
-
-type DomainConfig struct {
-	Cluster []ClusterNode `json:"cluster"`
-}
-
-type ClusterNode struct {
-	Host string `json:"host"`
-	IP   string `json:"ip"`
-}
+// Deploy 等结构体已在 light.go 中定义
 
 var generateCmd = &cobra.Command{
 	Use:   "generate [deploy_file]",
@@ -36,94 +24,42 @@ var generateCmd = &cobra.Command{
 		}
 
 		genesis, _ := cmd.Flags().GetBool("genesis")
-		
+
 		utils.Info("Generating domain files from: %s", deployFile)
-		
-		// Read deploy file
-		data, err := os.ReadFile(deployFile)
+
+		// 使用 light.go 中的 GenerateDomain 函数
+		domain, err := GenerateDomain(deployFile)
 		if err != nil {
-			return fmt.Errorf("failed to read deploy file: %w", err)
+			return fmt.Errorf("failed to generate domain: %w", err)
 		}
 
-		var deploy DeployConfig
-		if err := json.Unmarshal(data, &deploy); err != nil {
-			return fmt.Errorf("failed to parse deploy file: %w", err)
+		// 生成 domain.json 文件
+		domainFile := "domain.json"
+		utils.Info("Generating domain file: %s", domainFile)
+
+		if err := writeDomainFile(domainFile, domain); err != nil {
+			return fmt.Errorf("failed to write domain file: %w", err)
 		}
 
-		// Generate domain files
-		for domainName, domainConfig := range deploy.Domains {
-			domainFile := fmt.Sprintf("domain.json")
-			utils.Info("Generating domain file: %s", domainFile)
-			
-			if err := generateDomainFile(domainFile, domainName, domainConfig); err != nil {
-				utils.Error("Failed to generate %s: %v", domainFile, err)
-				continue
+		// 如果启用了 genesis 选项
+		if genesis {
+			utils.Info("Generating genesis configuration...")
+			if err := generateGenesisConfig(domain); err != nil {
+				return fmt.Errorf("failed to generate genesis: %w", err)
 			}
 		}
 
-		if genesis {
-			utils.Info("Genesis flag enabled - would generate genesis files")
-		}
-
+		utils.Info("Generation completed successfully")
 		return nil
 	},
 }
 
-func generateDomainFile(filename, domainName string, config DomainConfig) error {
-	// Generate NODE_ID using SHA256 hash (matching Python logic)
-	nodeID := generateNodeID()
-	
-	// Create basic domain structure matching Python output
-	domain := map[string]interface{}{
-		"build_root":     "../",
-		"chain_id":       "pharos-node",
-		"chain_protocol": "evm",
-		"domain_label":   domainName,
-		"version":        "2.0.0",
-		"run_user":       "root",
-		"genesis_conf":   "../genesis.conf",
-		"mygrid": map[string]interface{}{
-			"conf": map[string]interface{}{
-				"enable_adaptive": true,
-				"filepath":        "../conf/mygrid.conf.json",
-			},
-			"env": map[string]interface{}{
-				"enable_adaptive": true,
-				"filepath":        "../conf/mygrid.light.env.json",
-			},
-		},
-		"secret": map[string]interface{}{
-			"domain": map[string]interface{}{
-				"key_type": "prime256v1",
-				"files": map[string]string{
-					"key":             fmt.Sprintf("../scripts/resources/domain_keys/prime256v1/%s/new.key", domainName),
-					"key_pub":         fmt.Sprintf("../scripts/resources/domain_keys/prime256v1/%s/new.pub", domainName),
-					"stabilizing_key": fmt.Sprintf("../scripts/resources/domain_keys/bls12381/%s/new.key", domainName),
-					"stabilizing_pk":  fmt.Sprintf("../scripts/resources/domain_keys/bls12381/%s/new.pub", domainName),
-				},
-			},
-			"client": map[string]interface{}{
-				"key_type": "prime256v1",
-				"files": map[string]string{
-					"ca_cert": "../conf/resources/portal/prime256v1/client/ca.crt",
-					"cert":    "../conf/resources/portal/prime256v1/client/client.crt",
-					"key":     "../conf/resources/portal/prime256v1/client/client.key",
-				},
-			},
-		},
-		"use_generated_keys": true,
-		"key_passwd":         "123abc",
-		"docker": map[string]interface{}{
-			"enable":   false,
-			"registry": "registry-vpc.cn-shanghai.aliyuncs.com/pharos",
-		},
-		"common": createCommonConfig(),
-		"cluster": createClusterConfig(domainName, config, nodeID),
-		"initial_stake_in_gwei": 1000000000,
-	}
+// writeDomainFile 将 Domain 结构写入 JSON 文件
+func writeDomainFile(filename string, domain *Domain) error {
+	// 转换为 map[string]interface{} 以便更好地控制 JSON 输出
+	domainMap := domainToMap(domain)
 
-	// Write domain file
-	data, err := json.MarshalIndent(domain, "", "  ")
+	data, err := json.MarshalIndent(domainMap, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal domain config: %w", err)
 	}
@@ -131,92 +67,189 @@ func generateDomainFile(filename, domainName string, config DomainConfig) error 
 	return os.WriteFile(filename, data, 0644)
 }
 
-func generateNodeID() string {
-	// Generate a random 32-byte key and hash it with SHA256 (matching Python logic)
-	// In production, this would read from actual key files
-	randomBytes := make([]byte, 32)
-	for i := range randomBytes {
-		randomBytes[i] = byte(i) // Simple deterministic pattern for demo
-	}
-	
-	hash := sha256.Sum256(randomBytes)
-	return fmt.Sprintf("%x", hash)
-}
-
-func createCommonConfig() map[string]interface{} {
-	return map[string]interface{}{
-		"env": map[string]string{},
-		"log": map[string]interface{}{
-			"storage_write": map[string]interface{}{
-				"filename":      "../log/storage_write.log",
-				"max_file_size": 209715200,
-				"max_files":     100,
-				"level":         "info",
-				"flush":         false,
+// domainToMap 将 Domain 结构转换为 map，保持字段顺序和格式
+func domainToMap(domain *Domain) map[string]interface{} {
+	result := map[string]interface{}{
+		"build_root":        domain.BuildRoot,
+		"chain_id":          domain.ChainID,
+		"chain_protocol":    domain.ChainProtocol,
+		"domain_label":      domain.DomainLabel,
+		"version":           domain.Version,
+		"run_user":          domain.RunUser,
+		"deploy_dir":        domain.DeployDir,
+		"genesis_conf":      domain.GenesisConf,
+		"mygrid": map[string]interface{}{
+			"conf": map[string]interface{}{
+				"enable_adaptive": domain.Mygrid.Conf.EnableAdaptive,
+				"filepath":        domain.Mygrid.Conf.FilePath,
 			},
-			"pharos": map[string]interface{}{
-				"filename":      "../log/pharos.log",
-				"max_file_size": 209715200,
-				"max_files":     200,
-				"level":         "info",
-				"flush":         false,
+			"env": map[string]interface{}{
+				"enable_adaptive": domain.Mygrid.Env.EnableAdaptive,
+				"filepath":        domain.Mygrid.Env.FilePath,
 			},
 		},
-		"config": map[string]interface{}{
+		"secret": map[string]interface{}{
+			"domain": map[string]interface{}{
+				"key_type": domain.Secret.Domain.KeyType,
+				"files":    domain.Secret.Domain.Files,
+			},
+			"client": map[string]interface{}{
+				"key_type": domain.Secret.Client.KeyType,
+				"files":    domain.Secret.Client.Files,
+			},
+		},
+		"use_generated_keys":    domain.UseGeneratedKeys,
+		"key_passwd":           domain.KeyPasswd,
+		"portal_ssl_pass":      domain.PortalSslPass,
+		"enable_setkey_env":    domain.EnableSetkeyEnv,
+		"docker": map[string]interface{}{
+			"enable":   domain.Docker.Enable,
+			"registry": domain.Docker.Registry,
+		},
+		"common": map[string]interface{}{
+			"env":    domain.Common.Env,
+			"log":    domain.Common.Log,
+			"config": domain.Common.Config,
+			"gflags": domain.Common.Gflags,
 			"metrics": map[string]interface{}{
-				"enable_pamir_cetina":                false,
-				"pamir_cetina_push_address":          "metrics.prometheus-prometheus-pushgateway.prometheus-agent-namespace.svc.cluster.local",
-				"pamir_cetina_job_name":              "pharos_evm_16c",
+				"enable":        domain.Common.Metrics.Enable,
+				"push_address":  domain.Common.Metrics.PushAddress,
+				"job_name":      domain.Common.Metrics.JobName,
+				"push_interval": domain.Common.Metrics.PushInterval,
+				"push_port":     domain.Common.Metrics.PushPort,
 			},
 		},
-		"gflags": map[string]string{
-			"enable_eip155":           "true",
-			"max_pending_txs_depth":   "64",
-			"enable_perf":             "false",
-			"enable_rpc_rate_limit":   "false",
-		},
-		"metrics": map[string]interface{}{
-			"push_address":  "",
-			"push_interval": "",
-			"enable":        false,
-			"push_port":     "",
-			"job_name":      "",
-		},
+		"cluster":               clusterToMap(domain.Cluster),
+		"initial_stake_in_gwei": domain.InitialStakeInGwei,
 	}
+
+	return result
 }
 
-func createClusterConfig(domainName string, config DomainConfig, nodeID string) map[string]interface{} {
-	if len(config.Cluster) == 0 {
-		return map[string]interface{}{}
+// clusterToMap 将 cluster map 转换为合适的格式
+func clusterToMap(cluster map[string]Instance) map[string]interface{} {
+	result := make(map[string]interface{})
+	for name, instance := range cluster {
+		result[name] = map[string]interface{}{
+			"service": instance.Service,
+			"name":    instance.Name,
+			"ip":      instance.IP,
+			"dir":     instance.Dir,
+			"args":    instance.Args,
+			"env":     instance.Env,
+			"log":     instance.Log,
+			"config":  instance.Config,
+			"gflags":  instance.Gflags,
+		}
 	}
-	
-	node := config.Cluster[0]
-	return map[string]interface{}{
-		"light": map[string]interface{}{
-			"service": "light",
-			"ip":      "127.0.0.1",
-			"host":    node.Host,
-			"args":    []string{"-d"},
-			"env": map[string]string{
-				"LIGHT_RPC_LISTEN_URL":     "0.0.0.0:20000",
-				"LIGHT_RPC_ADVERTISE_URL":  fmt.Sprintf("%s:20000", node.Host),
-				"CLIENT_ADVERTISE_URLS":    fmt.Sprintf("tls://%s:18000,http://%s:18100,ws://%s:18200,wss://%s:18300", node.Host, node.Host, node.Host, node.Host),
-				"CLIENT_LISTEN_URLS":       "tls://0.0.0.0:18000,http://0.0.0.0:18100,ws://0.0.0.0:18200,wss://0.0.0.0:18300",
-				"PORTAL_UUID":              "100",
-				"DOMAIN_LISTEN_URLS0":      "tcp://0.0.0.0:19000",
-				"DOMAIN_LISTEN_URLS1":      "tcp://0.0.0.0:19001",
-				"DOMAIN_LISTEN_URLS2":      "tcp://0.0.0.0:19002",
-				"STORAGE_RPC_ADVERTISE_URL": fmt.Sprintf("%s:20000", node.Host),
-				"STORAGE_ID":               "0",
-				"STORAGE_MSU":              "0-255",
-				"TXPOOL_PARTITION_LIST":    "0-255",
-				"NODE_ID":                  nodeID,
+	return result
+}
+
+// generateGenesisConfig 生成创世配置
+func generateGenesisConfig(domain *Domain) error {
+	// 读取公钥
+	pubkeyContent, err := os.ReadFile(domain.Secret.Domain.Files["key_pub"])
+	if err != nil {
+		return fmt.Errorf("failed to read public key: %w", err)
+	}
+
+	blsPubkeyContent, err := os.ReadFile(domain.Secret.Domain.Files["stabilizing_pk"])
+	if err != nil {
+		return fmt.Errorf("failed to read BLS public key: %w", err)
+	}
+
+	pubkey := string(pubkeyContent)
+	blsPubkey := string(blsPubkeyContent)
+
+	// 获取第一个 light 实例的配置
+	lightInst, exists := domain.Cluster["light"]
+	if !exists {
+		return fmt.Errorf("light instance not found in cluster")
+	}
+
+	endpoint := lightInst.Env["CLIENT_ADVERTISE_URLS"]
+
+	// 生成验证者存储槽
+	domainSlots := GenerateDomainSlots(
+		1, // totalDomains
+		0, // domainIndex
+		pubkey,
+		blsPubkey,
+		endpoint,
+		int(domain.InitialStakeInGwei),
+		"2cc298bdee7cfeac9b49f9659e2f3d637e149696", // 默认 admin address
+	)
+
+	// 生成链配置存储槽
+	configSlots := GenerateChaincfgSlots(
+		map[string]string{
+			"epoch_blocks":          "64",
+			"block_period":          "3",
+			"max_validators":        "100",
+			"unbond_period":         "4032",
+			"withdraw_period":       "4032",
+			"min_stake":             "1000000000000000000", // 1 ETH in wei
+			"max_stake":             "1000000000000000000000", // 1000 ETH in wei
+			"commission_rate":       "1000", // 10%
+			"validator_join_rate":   "10",
+			"min_balance":           "100000000000000000", // 0.1 ETH in wei
+		},
+		"2cc298bdee7cfeac9b49f9659e2f3d637e149696", // 默认 admin address
+	)
+
+	// 生成规则管理器存储槽
+	ruleSlots := GenerateRuleMngSlots(configSlots, "2cc298bdee7cfeac9b49f9659e2f3d637e149696")
+
+	// 生成创世配置文件
+	genesisFile := fmt.Sprintf("genesis%s.conf", domain.ChainID)
+	if err := writeGenesisConf(genesisFile, domainSlots, ruleSlots); err != nil {
+		return fmt.Errorf("failed to write genesis config: %w", err)
+	}
+
+	utils.Info("Genesis configuration written to: %s", genesisFile)
+	return nil
+}
+
+// writeGenesisConf 写入创世配置文件
+func writeGenesisConf(filename string, domainSlots, ruleSlots map[string]string) error {
+	// 简化的创世配置格式
+	genesis := map[string]interface{}{
+		"genesis": map[string]interface{}{
+			"chain_id": 1000,
+			"gas_limit": 30000000,
+			"timestamp": 1737937200,
+			"alloc": map[string]interface{}{
+				"0000000000000000000000000000000000001000": map[string]interface{}{
+					"balance": "1000000000000000000000000", // 1M ETH for faucet
+				},
+				"0000000000000000000000000000000000001001": map[string]interface{}{
+					"balance": "1000000000000000000000000", // 1M ETH for test
+				},
+				"2cc298bdee7cfeac9b49f9659e2f3d637e149696": map[string]interface{}{
+					"balance": "1000000000000000000000000", // 1M ETH for admin
+				},
 			},
-			"log":    map[string]interface{}{},
-			"config": map[string]interface{}{},
-			"gflags": map[string]interface{}{},
+			"validators": map[string]interface{}{
+				"contract": "0x0000000000000000000000000000000000001000",
+				"storage":   domainSlots,
+			},
+			"chain_cfg": map[string]interface{}{
+				"contract": "0x0000000000000000000000000000000000001001",
+				"storage":   ruleSlots,
+			},
+			"rule_manager": map[string]interface{}{
+				"contract": "0x0000000000000000000000000000000000001002",
+				"storage":   ruleSlots,
+			},
 		},
 	}
+
+	data, err := json.MarshalIndent(genesis, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal genesis config: %w", err)
+	}
+
+	return os.WriteFile(filename, data, 0644)
 }
 
 func init() {
