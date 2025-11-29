@@ -808,7 +808,7 @@ func GenerateDomain(deployFilePath string) (*Domain, error) {
 			domain.DeployDir = deploy.DeployRoot + "domain0"
 		}
 		keyDir := domain.BuildRoot + "scripts/resources/domain_keys/" + deploy.DomainKeyType + "/domain0"
-		stabilizingKeyDir := domain.BuildRoot + "scripts/resources/domain_keys/bls12381/domain0"
+		stabilizingKeyDir := domain.BuildRoot + "'scripts/resources/domain_keys/bls12381/domain0"
 		keyFile := "generate.key"
 		pkeyFile := "generate.pub"
 		if domain.UseGeneratedKeys {
