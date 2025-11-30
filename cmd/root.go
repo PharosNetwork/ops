@@ -8,6 +8,7 @@ import (
 
 var (
 	debug   bool
+	verbose bool
 	rootCmd = &cobra.Command{
 		Use:   "pharos-ops",
 		Short: "Pharos blockchain operations tool",

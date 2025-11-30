@@ -1,0 +1,496 @@
+package composer
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+
+	"pharos-ops/pkg/domain"
+	"pharos-ops/pkg/utils"
+)
+
+// Deploy handles the deployment of services
+func (c *Composer) Deploy(service string, deployAll bool) error {
+	utils.Info("Starting deployment for domain: %s", c.domain.DomainLabel)
+
+	// Parse service parameter
+	services := c.parseService(service)
+
+	// Clean existing data and logs first
+	utils.Info("Cleaning existing data and logs...")
+	for _, svc := range services {
+		if err := c.clean(svc, true); err != nil {
+			return fmt.Errorf("failed to clean service %s: %w", svc, err)
+		}
+	}
+
+	// Group instances by host
+	instancesByHost := c.getInstancesByHost(services)
+
+	// Deploy to each host
+	for host, instances := range instancesByHost {
+		utils.Info("Deploying to host: %s", host)
+
+		if host == "127.0.0.1" || host == "localhost" {
+			// Local deployment
+			if err := c.deployLocal(instances); err != nil {
+				return fmt.Errorf("failed to deploy locally: %w", err)
+			}
+		} else {
+			// Remote deployment
+			if err := c.deployRemote(host, instances); err != nil {
+				return fmt.Errorf("failed to deploy to %s: %w", host, err)
+			}
+		}
+	}
+
+	// Deploy local CLI tools if needed
+	if deployAll || len(services) == 0 {
+		if err := c.deployLocalCLI(); err != nil {
+			return fmt.Errorf("failed to deploy local CLI: %w", err)
+		}
+	}
+
+	utils.Info("Deployment completed successfully")
+	return nil
+}
+
+// parseService determines which services to deploy based on the service parameter
+func (c *Composer) parseService(service string) []string {
+	if service == "all" || service == "svc" {
+		// Return all services
+		var services []string
+		for name := range c.domain.Cluster {
+			services = append(services, name)
+		}
+		return services
+	}
+
+	if service != "" {
+		return []string{service}
+	}
+
+	// Default: deploy all configured services
+	var services []string
+	for name := range c.domain.Cluster {
+		services = append(services, name)
+	}
+	return services
+}
+
+// getInstancesByHost groups instances by host for the given services
+func (c *Composer) getInstancesByHost(services []string) map[string][]domain.Instance {
+	instancesByHost := make(map[string][]domain.Instance)
+
+	for _, inst := range c.domain.Cluster {
+		// Check if this instance's service is in our target services
+		for _, svc := range services {
+			if inst.Service == svc {
+				host := inst.Host
+				if host == "" {
+					host = inst.IP
+				}
+				instancesByHost[host] = append(instancesByHost[host], inst)
+				break
+			}
+		}
+	}
+
+	return instancesByHost
+}
+
+// deployLocal handles local deployment
+func (c *Composer) deployLocal(instances []domain.Instance) error {
+	for _, inst := range instances {
+		if err := c.deployInstanceLocal(inst); err != nil {
+			return fmt.Errorf("failed to deploy instance %s locally: %w", inst.Name, err)
+		}
+	}
+	return nil
+}
+
+// deployRemote handles remote deployment via SSH
+func (c *Composer) deployRemote(host string, instances []domain.Instance) error {
+	// Create SSH command wrapper
+	sshCmd := func(command string) error {
+		utils.Debug("Executing SSH command: %s", command)
+		cmd := exec.Command("ssh", fmt.Sprintf("%s@%s", c.domain.RunUser, host), command)
+		return cmd.Run()
+	}
+
+	// Create workspace directory
+	workspace := c.domain.DeployDir
+	if err := sshCmd(fmt.Sprintf("mkdir -p %s", workspace)); err != nil {
+		return fmt.Errorf("failed to create workspace: %w", err)
+	}
+
+	// Deploy binaries
+	if err := c.deployBinariesRemote(host, instances); err != nil {
+		return fmt.Errorf("failed to deploy binaries: %w", err)
+	}
+
+	// Deploy configurations
+	if err := c.deployConfigsRemote(host, instances); err != nil {
+		return fmt.Errorf("failed to deploy configs: %w", err)
+	}
+
+	return nil
+}
+
+// deployInstanceLocal deploys a single instance locally
+func (c *Composer) deployInstanceLocal(inst domain.Instance) error {
+	utils.Info("Deploying instance locally: %s", inst.Name)
+
+	// Create directories
+	dirs := []string{
+		inst.Dir,
+		filepath.Join(inst.Dir, "bin"),
+		filepath.Join(inst.Dir, "conf"),
+		filepath.Join(inst.Dir, "data"),
+		filepath.Join(inst.Dir, "logs"),
+	}
+
+	for _, dir := range dirs {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("failed to create directory %s: %w", dir, err)
+		}
+	}
+
+	// Deploy binary
+	binaryPath := filepath.Join(c.domain.BuildRoot, "bin", c.getBinaryName(inst.Service))
+	destPath := filepath.Join(inst.Dir, "bin", c.getBinaryName(inst.Service))
+
+	if err := copyFile(binaryPath, destPath); err != nil {
+		return fmt.Errorf("failed to copy binary: %w", err)
+	}
+
+	// Make binary executable
+	if err := os.Chmod(destPath, 0755); err != nil {
+		return fmt.Errorf("failed to make binary executable: %w", err)
+	}
+
+	// Deploy configuration files
+	if err := c.deployConfigLocal(inst); err != nil {
+		return fmt.Errorf("failed to deploy config: %w", err)
+	}
+
+	// Deploy libraries
+	if err := c.deployLibrariesLocal(inst); err != nil {
+		return fmt.Errorf("failed to deploy libraries: %w", err)
+	}
+
+	return nil
+}
+
+// deployBinariesRemote deploys binaries to remote host
+func (c *Composer) deployBinariesRemote(host string, instances []domain.Instance) error {
+	// Group binaries by type to avoid duplicate transfers
+	binaries := make(map[string]bool)
+	for _, inst := range instances {
+		binaries[c.getBinaryName(inst.Service)] = true
+	}
+
+	// Copy each binary
+	for binary := range binaries {
+		srcPath := filepath.Join(c.domain.BuildRoot, "bin", binary)
+		destDir := filepath.Join(c.domain.DeployDir, "bin")
+
+		// Use scp to copy binary
+		cmd := exec.Command("scp", srcPath, fmt.Sprintf("%s@%s:%s", c.domain.RunUser, host, destDir))
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("failed to copy binary %s: %w", binary, err)
+		}
+
+		// Make binary executable on remote host
+		sshCmd := exec.Command("ssh", fmt.Sprintf("%s@%s", c.domain.RunUser, host),
+			fmt.Sprintf("chmod +x %s/%s", destDir, binary))
+		if err := sshCmd.Run(); err != nil {
+			return fmt.Errorf("failed to make binary executable: %w", err)
+		}
+	}
+
+	// Create symlinks for each instance
+	for _, inst := range instances {
+		binaryPath := filepath.Join(c.domain.DeployDir, "bin", c.getBinaryName(inst.Service))
+		targetPath := filepath.Join(inst.Dir, "bin")
+
+		sshCmd := exec.Command("ssh", fmt.Sprintf("%s@%s", c.domain.RunUser, host),
+			fmt.Sprintf("ln -sf %s %s", binaryPath, targetPath))
+		if err := sshCmd.Run(); err != nil {
+			utils.Warn("Failed to create symlink for %s: %v", inst.Name, err)
+		}
+	}
+
+	return nil
+}
+
+// deployConfigsRemote deploys configuration files to remote host
+func (c *Composer) deployConfigsRemote(host string, instances []domain.Instance) error {
+	for _, inst := range instances {
+		// Create instance directories
+		dirs := []string{
+			inst.Dir,
+			filepath.Join(inst.Dir, "conf"),
+			filepath.Join(inst.Dir, "data"),
+			filepath.Join(inst.Dir, "logs"),
+		}
+
+		for _, dir := range dirs {
+			cmd := exec.Command("ssh", fmt.Sprintf("%s@%s", c.domain.RunUser, host),
+				fmt.Sprintf("mkdir -p %s", dir))
+			if err := cmd.Run(); err != nil {
+				return fmt.Errorf("failed to create directory %s: %w", dir, err)
+			}
+		}
+
+		// Deploy launch configuration
+		if err := c.deployLaunchConfigRemote(host, inst); err != nil {
+			return fmt.Errorf("failed to deploy launch config: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// deployConfigLocal deploys configuration for a local instance
+func (c *Composer) deployConfigLocal(inst domain.Instance) error {
+	// Generate launch configuration
+	launchConfig := c.generateLaunchConfig(inst)
+	configPath := filepath.Join(inst.Dir, "conf", "launch.conf")
+
+	file, err := os.Create(configPath)
+	if err != nil {
+		return fmt.Errorf("failed to create config file: %w", err)
+	}
+	defer file.Close()
+
+	if _, err := file.WriteString(launchConfig); err != nil {
+		return fmt.Errorf("failed to write config: %w", err)
+	}
+
+	return nil
+}
+
+// deployLaunchConfigRemote deploys launch configuration to remote host
+func (c *Composer) deployLaunchConfigRemote(host string, inst domain.Instance) error {
+	launchConfig := c.generateLaunchConfig(inst)
+
+	// Create temporary file locally
+	tmpFile, err := os.CreateTemp("", "launch-*.conf")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString(launchConfig); err != nil {
+		return fmt.Errorf("failed to write config to temp file: %w", err)
+	}
+	tmpFile.Close()
+
+	// Copy to remote host
+	remotePath := filepath.Join(inst.Dir, "conf", "launch.conf")
+	cmd := exec.Command("scp", tmpFile.Name(), fmt.Sprintf("%s@%s:%s", c.domain.RunUser, host, remotePath))
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to copy config to remote: %w", err)
+	}
+
+	return nil
+}
+
+// deployLibrariesLocal deploys required libraries locally
+func (c *Composer) deployLibrariesLocal(inst domain.Instance) error {
+	// Deploy EVM library if needed
+	if c.domain.ChainProtocol == "evm" || c.domain.ChainProtocol == "all" {
+		evmLib := filepath.Join(c.domain.BuildRoot, "bin", "libevmone.so")
+		if _, err := os.Stat(evmLib); err == nil {
+			destPath := filepath.Join(inst.Dir, "bin", "libevmone.so")
+			if err := copyFile(evmLib, destPath); err != nil {
+				return fmt.Errorf("failed to copy EVM library: %w", err)
+			}
+		}
+	}
+
+	// Deploy client tools
+	clientTools := []string{"pharos_cli"}
+	for _, tool := range clientTools {
+		srcPath := filepath.Join(c.domain.BuildRoot, "bin", tool)
+		if _, err := os.Stat(srcPath); err == nil {
+			destPath := filepath.Join(inst.Dir, "bin", tool)
+			if err := copyFile(srcPath, destPath); err != nil {
+				return fmt.Errorf("failed to copy %s: %w", tool, err)
+			}
+			if err := os.Chmod(destPath, 0755); err != nil {
+				return fmt.Errorf("failed to make %s executable: %w", tool, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// deployLocalCLI deploys CLI tools locally
+func (c *Composer) deployLocalCLI() error {
+	cliDir := filepath.Join(c.domain.BuildRoot, "bin")
+	localDir := filepath.Join(c.domainPath, "bin")
+
+	// Create local bin directory
+	if err := os.MkdirAll(localDir, 0755); err != nil {
+		return fmt.Errorf("failed to create local bin directory: %w", err)
+	}
+
+	// Copy CLI tools
+	tools := []string{"pharos_cli"}
+	for _, tool := range tools {
+		srcPath := filepath.Join(cliDir, tool)
+		destPath := filepath.Join(localDir, tool)
+
+		if _, err := os.Stat(srcPath); err != nil {
+			utils.Warn("CLI tool %s not found at %s", tool, srcPath)
+			continue
+		}
+
+		if err := copyFile(srcPath, destPath); err != nil {
+			return fmt.Errorf("failed to copy CLI tool %s: %w", tool, err)
+		}
+
+		if err := os.Chmod(destPath, 0755); err != nil {
+			return fmt.Errorf("failed to make CLI tool %s executable: %w", tool, err)
+		}
+	}
+
+	utils.Info("CLI tools deployed to %s", localDir)
+	return nil
+}
+
+// generateLaunchConfig generates the launch configuration for an instance
+func (c *Composer) generateLaunchConfig(inst domain.Instance) string {
+	var config strings.Builder
+
+	// Basic configuration
+	config.WriteString(fmt.Sprintf("# Pharos Launch Configuration for %s\n", inst.Name))
+	config.WriteString(fmt.Sprintf("service = %q\n", inst.Service))
+	config.WriteString(fmt.Sprintf("chain_id = %q\n", c.domain.ChainID))
+	config.WriteString(fmt.Sprintf("domain_label = %q\n", c.domain.DomainLabel))
+	config.WriteString(fmt.Sprintf("deploy_dir = %q\n", c.domain.DeployDir))
+	config.WriteString("\n")
+
+	// Network configuration
+	if inst.Config != nil {
+		if endpoint, ok := inst.Config["endpoint"].(string); ok && endpoint != "" {
+			config.WriteString(fmt.Sprintf("endpoint = %q\n", endpoint))
+		}
+	}
+
+	if p2pConfig, ok := inst.Config["p2p"].(map[string]interface{}); ok {
+		if host, ok := p2pConfig["host"].(string); ok && host != "" {
+			config.WriteString(fmt.Sprintf("p2p_host = %q\n", host))
+		}
+		if port, ok := p2pConfig["port"].(float64); ok {
+			config.WriteString(fmt.Sprintf("p2p_port = %d\n", int(port)))
+		}
+	}
+
+	// Add gflags
+	if inst.GFlags != nil {
+		config.WriteString("\n[gflags]\n")
+		for key, value := range inst.GFlags {
+			config.WriteString(fmt.Sprintf("%s = %q\n", key, value))
+		}
+	}
+
+	// Add logging configuration
+	if inst.Log != nil {
+		config.WriteString("\n[log]\n")
+		if level, ok := inst.Log["level"].(string); ok {
+			config.WriteString(fmt.Sprintf("level = %q\n", level))
+		}
+		if dir, ok := inst.Log["dir"].(string); ok {
+			config.WriteString(fmt.Sprintf("dir = %q\n", dir))
+		}
+	}
+
+	return config.String()
+}
+
+// clean removes data, logs, and metadata for services
+func (c *Composer) clean(service string, cleanMeta bool) error {
+	instances := c.getInstances(service)
+
+	for host, insts := range instances {
+		if host == "127.0.0.1" || host == "localhost" {
+			// Local clean
+			for _, inst := range insts {
+				if err := c.cleanLocal(inst, cleanMeta); err != nil {
+					return fmt.Errorf("failed to clean %s locally: %w", inst.Name, err)
+				}
+			}
+		} else {
+			// Remote clean
+			if err := c.cleanRemote(host, insts, cleanMeta); err != nil {
+				return fmt.Errorf("failed to clean on %s: %w", host, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// cleanLocal cleans up local instance data
+func (c *Composer) cleanLocal(inst domain.Instance, cleanMeta bool) error {
+	utils.Info("Cleaning instance: %s", inst.Name)
+
+	// Clean data directory
+	dataDir := filepath.Join(inst.Dir, "data")
+	if _, err := os.Stat(dataDir); err == nil {
+		if err := os.RemoveAll(dataDir); err != nil {
+			return fmt.Errorf("failed to remove data directory: %w", err)
+		}
+	}
+
+	// Clean log directory
+	logDir := filepath.Join(inst.Dir, "logs")
+	if _, err := os.Stat(logDir); err == nil {
+		if err := os.RemoveAll(logDir); err != nil {
+			return fmt.Errorf("failed to remove log directory: %w", err)
+		}
+	}
+
+	// Clean metadata if requested
+	if cleanMeta {
+		metaDir := filepath.Join(inst.Dir, "meta")
+		if _, err := os.Stat(metaDir); err == nil {
+			if err := os.RemoveAll(metaDir); err != nil {
+				return fmt.Errorf("failed to remove meta directory: %w", err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// cleanRemote cleans up remote instance data
+func (c *Composer) cleanRemote(host string, instances []domain.Instance, cleanMeta bool) error {
+	for _, inst := range instances {
+		// Remove data directory
+		cmd := exec.Command("ssh", fmt.Sprintf("%s@%s", c.domain.RunUser, host),
+			fmt.Sprintf("rm -rf %s/data", inst.Dir))
+		cmd.Run() // Ignore errors for cleanup
+
+		// Remove log directory
+		cmd = exec.Command("ssh", fmt.Sprintf("%s@%s", c.domain.RunUser, host),
+			fmt.Sprintf("rm -rf %s/logs", inst.Dir))
+		cmd.Run() // Ignore errors for cleanup
+
+		// Remove metadata if requested
+		if cleanMeta {
+			cmd = exec.Command("ssh", fmt.Sprintf("%s@%s", c.domain.RunUser, host),
+				fmt.Sprintf("rm -rf %s/meta", inst.Dir))
+			cmd.Run() // Ignore errors for cleanup
+		}
+	}
+
+	return nil
+}
+
