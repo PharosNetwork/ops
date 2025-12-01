@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"pharos-ops/pkg/utils"
 
@@ -12,11 +13,17 @@ import (
 )
 
 type DeployConfig struct {
-	Domains map[string]DomainConfig `json:"domains"`
+	BuildRoot   string                 `json:"build_root"`
+	ChainID     string                 `json:"chain_id"`
+	Version     string                 `json:"version"`
+	RunUser     string                 `json:"run_user"`
+	DeployRoot  string                 `json:"deploy_root"`
+	Domains     map[string]DomainConfig `json:"domains"`
 }
 
 type DomainConfig struct {
-	Cluster []ClusterNode `json:"cluster"`
+	DeployDir    string        `json:"deploy_dir"`
+	Cluster      []ClusterNode `json:"cluster"`
 }
 
 type ClusterNode struct {
@@ -52,10 +59,10 @@ var generateCmd = &cobra.Command{
 
 		// Generate domain files
 		for domainName, domainConfig := range deploy.Domains {
-			domainFile := fmt.Sprintf("domain.json")
+			domainFile := fmt.Sprintf("%s.json", domainName)
 			utils.Info("Generating domain file: %s", domainFile)
-			
-			if err := generateDomainFile(domainFile, domainName, domainConfig); err != nil {
+
+			if err := generateDomainFile(domainFile, domainName, domainConfig, deploy); err != nil {
 				utils.Error("Failed to generate %s: %v", domainFile, err)
 				continue
 			}
@@ -69,18 +76,28 @@ var generateCmd = &cobra.Command{
 	},
 }
 
-func generateDomainFile(filename, domainName string, config DomainConfig) error {
+func generateDomainFile(filename, domainName string, config DomainConfig, deploy DeployConfig) error {
 	// Generate NODE_ID using SHA256 hash (matching Python logic)
 	nodeID := generateNodeID()
-	
+
+	// Use deploy_dir from config, or fall back to deploy_root/domainName
+	deployDir := config.DeployDir
+	if deployDir == "" && deploy.DeployRoot != "" {
+		deployDir = filepath.Join(deploy.DeployRoot, domainName)
+	}
+	if deployDir == "" {
+		deployDir = "/tmp/pharos/" + domainName
+	}
+
 	// Create basic domain structure matching Python output
 	domain := map[string]interface{}{
-		"build_root":     "../",
-		"chain_id":       "pharos-node",
+		"build_root":     deploy.BuildRoot,
+		"chain_id":       deploy.ChainID,
 		"chain_protocol": "evm",
 		"domain_label":   domainName,
-		"version":        "2.0.0",
-		"run_user":       "root",
+		"deploy_dir":     deployDir,
+		"version":        deploy.Version,
+		"run_user":       deploy.RunUser,
 		"genesis_conf":   "../genesis.conf",
 		"mygrid": map[string]interface{}{
 			"conf": map[string]interface{}{

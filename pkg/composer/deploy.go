@@ -84,13 +84,26 @@ func (c *Composer) parseService(service string) []string {
 func (c *Composer) getInstancesByHost(services []string) map[string][]domain.Instance {
 	instancesByHost := make(map[string][]domain.Instance)
 
-	for _, inst := range c.domain.Cluster {
+	for name, inst := range c.domain.Cluster {
 		// Check if this instance's service is in our target services
 		for _, svc := range services {
 			if inst.Service == svc {
+				// Set the name if it's empty (Python version doesn't include name in the struct)
+				if inst.Name == "" {
+					inst.Name = name
+				}
+
+				// Set default dir if empty
+				if inst.Dir == "" && c.domain.DeployDir != "" {
+					inst.Dir = filepath.Join(c.domain.DeployDir, inst.Name)
+				}
+
 				host := inst.Host
 				if host == "" {
 					host = inst.IP
+				}
+				if host == "" {
+					host = "127.0.0.1"
 				}
 				instancesByHost[host] = append(instancesByHost[host], inst)
 				break
@@ -143,6 +156,11 @@ func (c *Composer) deployRemote(host string, instances []domain.Instance) error 
 func (c *Composer) deployInstanceLocal(inst domain.Instance) error {
 	utils.Info("Deploying instance locally: %s", inst.Name)
 
+	// Validate instance directory
+	if inst.Dir == "" {
+		return fmt.Errorf("instance directory is empty for %s", inst.Name)
+	}
+
 	// Create directories
 	dirs := []string{
 		inst.Dir,
@@ -158,27 +176,82 @@ func (c *Composer) deployInstanceLocal(inst domain.Instance) error {
 		}
 	}
 
-	// Deploy binary
-	binaryPath := filepath.Join(c.domain.BuildRoot, "bin", c.getBinaryName(inst.Service))
-	destPath := filepath.Join(inst.Dir, "bin", c.getBinaryName(inst.Service))
+	// Deploy binary - check multiple possible locations
+	binaryName := c.getBinaryName(inst.Service)
+	var binaryPath string
+	var searchPaths []string
 
-	if err := copyFile(binaryPath, destPath); err != nil {
-		return fmt.Errorf("failed to copy binary: %w", err)
+	// Build list of search paths
+	if c.domain.BuildRoot != "" {
+		searchPaths = append(searchPaths, filepath.Join(c.domain.BuildRoot, "bin", binaryName))
 	}
 
-	// Make binary executable
-	if err := os.Chmod(destPath, 0755); err != nil {
-		return fmt.Errorf("failed to make binary executable: %w", err)
+	// Common relative paths
+	searchPaths = append(searchPaths,
+		filepath.Join("bin", binaryName),
+		filepath.Join("..", "bin", binaryName),
+		filepath.Join("../bin", binaryName),
+		filepath.Join("../../bin", binaryName),
+	)
+
+	// Try all paths
+	for _, path := range searchPaths {
+		if _, err := os.Stat(path); err == nil {
+			binaryPath = path
+			utils.Debug("Found binary at: %s", binaryPath)
+			break
+		}
+	}
+
+	// If still not found, try alternative binary names
+	if binaryPath == "" && binaryName == "pharos" {
+		alternativeNames := []string{"aldaba", "pharos_node", "pharos-service"}
+		for _, altName := range alternativeNames {
+			for _, path := range searchPaths {
+				testPath := filepath.Join(filepath.Dir(path), altName)
+				if _, err := os.Stat(testPath); err == nil {
+					binaryPath = testPath
+					utils.Debug("Found alternative binary at: %s", binaryPath)
+					break
+				}
+			}
+			if binaryPath != "" {
+				break
+			}
+		}
+	}
+
+	if binaryPath != "" {
+		destPath := filepath.Join(inst.Dir, "bin", binaryName)
+		if err := copyFile(binaryPath, destPath); err != nil {
+			utils.Warn("Failed to copy binary %s: %v", binaryName, err)
+		} else {
+			// Make binary executable
+			if err := os.Chmod(destPath, 0755); err != nil {
+				utils.Warn("Failed to make binary executable: %v", err)
+			} else {
+				utils.Info("Deployed binary: %s -> %s", binaryPath, destPath)
+			}
+		}
+	} else {
+		utils.Warn("Binary %s not found, skipping binary deployment", binaryName)
 	}
 
 	// Deploy configuration files
 	if err := c.deployConfigLocal(inst); err != nil {
-		return fmt.Errorf("failed to deploy config: %w", err)
+		utils.Warn("Failed to deploy config: %v", err)
 	}
 
-	// Deploy libraries
-	if err := c.deployLibrariesLocal(inst); err != nil {
-		return fmt.Errorf("failed to deploy libraries: %w", err)
+	// Deploy libraries (EVM support)
+	if c.domain.ChainProtocol == "evm" || c.domain.ChainProtocol == "all" {
+		if err := c.deployLibrariesLocal(inst); err != nil {
+			utils.Warn("Failed to deploy libraries: %v", err)
+		}
+	}
+
+	// Deploy client tools
+	if err := c.deployClientToolsLocal(inst); err != nil {
+		utils.Warn("Failed to deploy client tools: %v", err)
 	}
 
 	return nil
@@ -361,6 +434,54 @@ func (c *Composer) deployLocalCLI() error {
 	}
 
 	utils.Info("CLI tools deployed to %s", localDir)
+	return nil
+}
+
+// deployClientToolsLocal deploys client tools to instance directory
+func (c *Composer) deployClientToolsLocal(inst domain.Instance) error {
+	// Check if we have aldaba_cli/pharos_cli
+	tools := []string{"aldaba_cli", "pharos_cli"}
+
+	for _, tool := range tools {
+		var srcPath string
+
+		// Try multiple locations
+		if c.domain.BuildRoot != "" {
+			srcPath = filepath.Join(c.domain.BuildRoot, "bin", tool)
+			if _, err := os.Stat(srcPath); os.IsNotExist(err) {
+				srcPath = ""
+			}
+		}
+
+		if srcPath == "" {
+			srcPath = filepath.Join("bin", tool)
+			if _, err := os.Stat(srcPath); os.IsNotExist(err) {
+				srcPath = ""
+			}
+		}
+
+		if srcPath == "" {
+			srcPath = filepath.Join("..", "bin", tool)
+			if _, err := os.Stat(srcPath); os.IsNotExist(err) {
+				srcPath = ""
+			}
+		}
+
+		if srcPath != "" {
+			destPath := filepath.Join(inst.Dir, "bin", tool)
+			if err := copyFile(srcPath, destPath); err != nil {
+				utils.Warn("Failed to copy client tool %s: %v", tool, err)
+			} else {
+				if err := os.Chmod(destPath, 0755); err != nil {
+					utils.Warn("Failed to make client tool %s executable: %v", tool, err)
+				} else {
+					utils.Info("Deployed client tool: %s -> %s", srcPath, destPath)
+				}
+			}
+			break  // Found one, that's enough
+		}
+	}
+
 	return nil
 }
 

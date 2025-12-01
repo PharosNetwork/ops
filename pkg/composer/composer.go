@@ -95,17 +95,30 @@ func (c *Composer) Stop(service string) error {
 
 func (c *Composer) getInstances(service string) map[string][]domain.Instance {
 	instances := make(map[string][]domain.Instance)
-	
-	for _, inst := range c.domain.Cluster {
+
+	for name, inst := range c.domain.Cluster {
 		if service == "" || inst.Service == service {
+			// Set the name if it's empty
+			if inst.Name == "" {
+				inst.Name = name
+			}
+
+			// Set default dir if empty
+			if inst.Dir == "" && c.domain.DeployDir != "" {
+				inst.Dir = filepath.Join(c.domain.DeployDir, inst.Name)
+			}
+
 			host := inst.Host
 			if host == "" {
 				host = inst.IP
 			}
+			if host == "" {
+				host = "127.0.0.1"
+			}
 			instances[host] = append(instances[host], inst)
 		}
 	}
-	
+
 	return instances
 }
 
@@ -190,5 +203,23 @@ func (c *Composer) stopInstance(inst domain.Instance) error {
 
 
 func (c *Composer) getBinaryName(service string) string {
-	return "pharos"
+	// Map service names to binary names
+	switch service {
+	case "light", "aldaba", "pharos":
+		return "pharos"  // or "aldaba" depending on the actual binary
+	case "etcd":
+		return "etcd"
+	case "storage", "mygrid":
+		return "storage"
+	case "portal":
+		return "portal"
+	case "txpool":
+		return "txpool"
+	case "controller", "dog":
+		return "pharos"
+	case "compute":
+		return "compute"
+	default:
+		return "pharos"
+	}
 }
