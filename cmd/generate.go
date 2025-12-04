@@ -12,6 +12,68 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// Types for domain generation
+type GenMygrid struct {
+	Conf GenMygridConf `json:"conf"`
+	Env  GenMygridConf `json:"env"`
+}
+
+type GenMygridConf struct {
+	EnableAdaptive bool   `json:"enable_adaptive"`
+	FilePath      string `json:"filepath"`
+}
+
+type GenSecretFiles struct {
+	KeyType string            `json:"key_type"`
+	Files   map[string]string `json:"files"`
+}
+
+type GenSecret struct {
+	Domain GenSecretFiles `json:"domain"`
+	Client GenSecretFiles `json:"client"`
+}
+
+type GenDocker struct {
+	Enable   bool   `json:"enable"`
+	Registry string `json:"registry"`
+}
+
+type OrderedDomain struct {
+	BuildRoot          string         `json:"build_root"`
+	ChainID            string         `json:"chain_id"`
+	ChainProtocol      string         `json:"chain_protocol"`
+	DomainLabel        string         `json:"domain_label"`
+	Version            string         `json:"version"`
+	RunUser            string         `json:"run_user"`
+	DeployDir          string         `json:"deploy_dir"`
+	GenesisConf        string         `json:"genesis_conf"`
+	Mygrid             GenMygrid      `json:"mygrid"`
+	Secret             GenSecret      `json:"secret"`
+	UseGeneratedKeys   bool           `json:"use_generated_keys"`
+	EnableDora         bool           `json:"enable_dora"`
+	KeyPasswd          string         `json:"key_passwd"`
+	Docker             GenDocker      `json:"docker"`
+	Common             OrderedCommon  `json:"common"`
+	Cluster            interface{}    `json:"cluster"`
+	InitialStakeInGwei uint64         `json:"initial_stake_in_gwei"`
+}
+
+type OrderedCommon struct {
+	Env     map[string]string      `json:"env"`
+	Log     map[string]interface{} `json:"log"`
+	Config  map[string]interface{} `json:"config"`
+	Gflags  map[string]string      `json:"gflags"`
+	Metrics OrderedMetricsConfig   `json:"metrics"`
+}
+
+type OrderedMetricsConfig struct {
+	Enable        bool   `json:"enable"`
+	PushAddress  string `json:"push_address"`
+	PushPort     string `json:"push_port"`
+	JobName      string `json:"job_name"`
+	PushInterval string `json:"push_interval"`
+}
+
 type DeployConfig struct {
 	BuildRoot   string                 `json:"build_root"`
 	ChainID     string                 `json:"chain_id"`
@@ -89,54 +151,55 @@ func generateDomainFile(filename, domainName string, config DomainConfig, deploy
 		deployDir = "/tmp/pharos/" + domainName
 	}
 
-	// Create basic domain structure matching Python output
-	domain := map[string]interface{}{
-		"build_root":     deploy.BuildRoot,
-		"chain_id":       deploy.ChainID,
-		"chain_protocol": "evm",
-		"domain_label":   domainName,
-		"deploy_dir":     deployDir,
-		"version":        deploy.Version,
-		"run_user":       deploy.RunUser,
-		"genesis_conf":   "../genesis.conf",
-		"mygrid": map[string]interface{}{
-			"conf": map[string]interface{}{
-				"enable_adaptive": true,
-				"filepath":        "../conf/mygrid.conf.json",
+	// Create domain structure exactly matching Python output
+	domain := OrderedDomain{
+		BuildRoot:          deploy.BuildRoot,
+		ChainID:            deploy.ChainID,
+		ChainProtocol:      "evm",
+		DomainLabel:        domainName,
+		Version:            deploy.Version,
+		RunUser:            deploy.RunUser,
+		DeployDir:          deployDir,
+		GenesisConf:        "../genesis.conf",
+		Mygrid: GenMygrid{
+			Conf: GenMygridConf{
+				EnableAdaptive: true,
+				FilePath:      "../conf/mygrid.conf.json",
 			},
-			"env": map[string]interface{}{
-				"enable_adaptive": true,
-				"filepath":        "../conf/mygrid.light.env.json",
+			Env: GenMygridConf{
+				EnableAdaptive: true,
+				FilePath:      "../conf/mygrid.light.env.json",
 			},
 		},
-		"secret": map[string]interface{}{
-			"domain": map[string]interface{}{
-				"key_type": "prime256v1",
-				"files": map[string]string{
+		Secret: GenSecret{
+			Domain: GenSecretFiles{
+				KeyType: "prime256v1",
+				Files: map[string]string{
 					"key":             fmt.Sprintf("../scripts/resources/domain_keys/prime256v1/%s/new.key", domainName),
 					"key_pub":         fmt.Sprintf("../scripts/resources/domain_keys/prime256v1/%s/new.pub", domainName),
 					"stabilizing_key": fmt.Sprintf("../scripts/resources/domain_keys/bls12381/%s/new.key", domainName),
 					"stabilizing_pk":  fmt.Sprintf("../scripts/resources/domain_keys/bls12381/%s/new.pub", domainName),
 				},
 			},
-			"client": map[string]interface{}{
-				"key_type": "prime256v1",
-				"files": map[string]string{
+			Client: GenSecretFiles{
+				KeyType: "prime256v1",
+				Files: map[string]string{
 					"ca_cert": "../conf/resources/portal/prime256v1/client/ca.crt",
 					"cert":    "../conf/resources/portal/prime256v1/client/client.crt",
 					"key":     "../conf/resources/portal/prime256v1/client/client.key",
 				},
 			},
 		},
-		"use_generated_keys": true,
-		"key_passwd":         "123abc",
-		"docker": map[string]interface{}{
-			"enable":   false,
-			"registry": "registry-vpc.cn-shanghai.aliyuncs.com/pharos",
+		UseGeneratedKeys:   true,
+		EnableDora:         false,
+		KeyPasswd:          "123abc",
+		Docker: GenDocker{
+			Enable:   false,
+			Registry: "registry-vpc.cn-shanghai.aliyuncs.com/pharos",
 		},
-		"common": createCommonConfig(),
-		"cluster": createClusterConfig(domainName, config, nodeID),
-		"initial_stake_in_gwei": 1000000000,
+		Common:             createCommonConfigStruct(),
+		Cluster:            createClusterConfig(domainName, config, nodeID),
+		InitialStakeInGwei: 1000000000,
 	}
 
 	// Write domain file
@@ -155,21 +218,49 @@ func generateNodeID() string {
 	for i := range randomBytes {
 		randomBytes[i] = byte(i) // Simple deterministic pattern for demo
 	}
-	
+
 	hash := sha256.Sum256(randomBytes)
 	return fmt.Sprintf("%x", hash)
 }
 
-func createCommonConfig() map[string]interface{} {
-	return map[string]interface{}{
-		"env": map[string]string{},
-		"log": map[string]interface{}{
+func createCommonConfigStruct() OrderedCommon {
+	return OrderedCommon{
+		Env: map[string]string{},
+		Log: map[string]interface{}{
 			"storage_write": map[string]interface{}{
 				"filename":      "../log/storage_write.log",
 				"max_file_size": 209715200,
 				"max_files":     100,
 				"level":         "info",
 				"flush":         false,
+			},
+			"storage_read": map[string]interface{}{
+				"filename":      "../log/storage_read.log",
+				"max_file_size": 209715200,
+				"max_files":     100,
+				"level":         "info",
+				"flush":         false,
+			},
+			"pamir": map[string]interface{}{
+				"filename":      "../log/pamir.log",
+				"max_file_size": 209715200,
+				"max_files":     100,
+				"level":         "info",
+				"flush":         false,
+			},
+			"vm": map[string]interface{}{
+				"filename":      "../log/vm.log",
+				"max_file_size": 209715200,
+				"max_files":     100,
+				"level":         "info",
+				"flush":         false,
+			},
+			"consensus": map[string]interface{}{
+				"filename":      "../log/consensus.log",
+				"max_file_size": 209715200,
+				"max_files":     100,
+				"level":         "info",
+				"flush":         true,
 			},
 			"pharos": map[string]interface{}{
 				"filename":      "../log/pharos.log",
@@ -178,26 +269,84 @@ func createCommonConfig() map[string]interface{} {
 				"level":         "info",
 				"flush":         false,
 			},
-		},
-		"config": map[string]interface{}{
-			"metrics": map[string]interface{}{
-				"enable_pamir_cetina":                false,
-				"pamir_cetina_push_address":          "metrics.prometheus-prometheus-pushgateway.prometheus-agent-namespace.svc.cluster.local",
-				"pamir_cetina_job_name":              "pharos_evm_16c",
+			"tracing": map[string]interface{}{
+				"filename":      "../log/tracing.log",
+				"max_file_size": 209715200,
+				"max_files":     100,
+				"level":         "error",
+				"flush":         false,
+			},
+			"audit": map[string]interface{}{
+				"filename":      "../log/audit.log",
+				"max_file_size": 209715200,
+				"max_files":     100,
+				"level":         "error",
+				"flush":         false,
+			},
+			"profile": map[string]interface{}{
+				"filename":      "../log/profile.log",
+				"max_file_size": 209715200,
+				"max_files":     200,
+				"level":         "info",
+				"flush":         false,
+			},
+			"alert": map[string]interface{}{
+				"filename":      "../log/alert.log",
+				"max_file_size": 209715200,
+				"max_files":     100,
+				"level":         "info",
+				"flush":         false,
+			},
+			"cubenet": map[string]interface{}{
+				"filename":      "../log/cubenet.log",
+				"max_file_size": 209715200,
+				"max_files":     100,
+				"level":         "info",
+				"flush":         false,
+			},
+			"traffic_in": map[string]interface{}{
+				"filename":      "../log/traffic_in.log",
+				"max_file_size": 209715200,
+				"max_files":     100,
+				"level":         "info",
+				"flush":         false,
+			},
+			"traffic_out": map[string]interface{}{
+				"filename":      "../log/traffic_out.log",
+				"max_file_size": 209715200,
+				"max_files":     100,
+				"level":         "info",
+				"flush":         false,
+			},
+			"access": map[string]interface{}{
+				"filename":      "../log/access.log",
+				"max_file_size": 209715200,
+				"max_files":     100,
+				"level":         "info",
+				"flush":         false,
 			},
 		},
-		"gflags": map[string]string{
+		Config: map[string]interface{}{
+			"metrics": map[string]interface{}{
+				"enable_pamir_cetina":                false,
+				"pamir_cetina_push_address":          "metrics.antchain.dl.alipaydev.com",
+				"pamir_cetina_job_name":              "aldaba_ng_perf",
+				"pamir_cetina_push_port":             80,
+				"pamir_cetina_push_interval":        1,
+			},
+		},
+		Gflags: map[string]string{
 			"enable_eip155":           "true",
 			"max_pending_txs_depth":   "64",
 			"enable_perf":             "false",
 			"enable_rpc_rate_limit":   "false",
 		},
-		"metrics": map[string]interface{}{
-			"push_address":  "",
-			"push_interval": "",
-			"enable":        false,
-			"push_port":     "",
-			"job_name":      "",
+		Metrics: OrderedMetricsConfig{
+			Enable:        false,
+			PushAddress:  "",
+			PushPort:     "",
+			JobName:      "",
+			PushInterval: "",
 		},
 	}
 }

@@ -1,19 +1,23 @@
 package domain
 
 type Domain struct {
-	ChainID       string                 `json:"chain_id"`
-	DomainLabel   string                 `json:"domain_label"`
-	DeployDir     string                 `json:"deploy_dir"`
-	BuildRoot     string                 `json:"build_root"`
-	RunUser       string                 `json:"run_user"`
-	ChainProtocol string                 `json:"chain_protocol"`
-	Version       string                 `json:"version"`
-	Cluster       map[string]Instance    `json:"cluster"`
-	Common        CommonConfig           `json:"common"`
-	Secret        SecretConfig           `json:"secret"`
-	Docker        DockerConfig           `json:"docker"`
-	Mygrid        MygridConfig           `json:"mygrid"`
-	GenesisConf   string                 `json:"genesis_conf"`
+	BuildRoot          string              `json:"build_root"`
+	ChainID            string              `json:"chain_id"`
+	ChainProtocol      string              `json:"chain_protocol"`
+	DomainLabel        string              `json:"domain_label"`
+	Version            string              `json:"version"`
+	RunUser            string              `json:"run_user"`
+	DeployDir          string              `json:"deploy_dir"`
+	GenesisConf        string              `json:"genesis_conf"`
+	Mygrid             MygridConfig        `json:"mygrid"`
+	Secret             SecretConfig        `json:"secret"`
+	UseGeneratedKeys   bool                `json:"use_generated_keys"`
+	EnableDora         bool                `json:"enable_dora"`
+	KeyPasswd          string              `json:"key_passwd"`
+	Docker             DockerConfig        `json:"docker"`
+	Common             CommonConfig        `json:"common"`
+	Cluster            map[string]Instance `json:"cluster"`
+	InitialStakeInGwei uint64              `json:"initial_stake_in_gwei"`
 }
 
 type Instance struct {

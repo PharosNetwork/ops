@@ -1,11 +1,13 @@
 package composer
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"pharos-ops/pkg/domain"
 	"pharos-ops/pkg/utils"
@@ -126,11 +128,39 @@ func (c *Composer) deployLocal(instances []domain.Instance) error {
 
 // deployRemote handles remote deployment via SSH
 func (c *Composer) deployRemote(host string, instances []domain.Instance) error {
-	// Create SSH command wrapper
+	// Create SSH command wrapper with timeout
 	sshCmd := func(command string) error {
 		utils.Debug("Executing SSH command: %s", command)
-		cmd := exec.Command("ssh", fmt.Sprintf("%s@%s", c.domain.RunUser, host), command)
-		return cmd.Run()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		cmd := exec.CommandContext(ctx, "ssh",
+			"-o", "ConnectTimeout=10",
+			"-o", "BatchMode=yes",
+			"-o", "StrictHostKeyChecking=no",
+			fmt.Sprintf("%s@%s", c.domain.RunUser, host), command)
+
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			if ctx.Err() == context.DeadlineExceeded {
+				return fmt.Errorf("SSH command timed out after 30 seconds")
+			}
+			if len(output) > 0 {
+				return fmt.Errorf("SSH command failed: %v, output: %s", err, string(output))
+			}
+			return fmt.Errorf("SSH command failed: %w", err)
+		}
+		return nil
+	}
+
+	// Test SSH connection first
+	if err := sshCmd("echo 'Connection test'"); err != nil {
+		utils.Error("Cannot connect to %s via SSH: %v", host, err)
+		utils.Error("Please ensure:")
+		utils.Error("1. SSH service is running on the remote host")
+		utils.Error("2. You can SSH manually using: ssh %s@%s", c.domain.RunUser, host)
+		utils.Error("3. SSH key authentication is properly configured")
+		return fmt.Errorf("SSH connection to %s failed: %w", host, err)
 	}
 
 	// Create workspace directory
@@ -249,7 +279,7 @@ func (c *Composer) deployInstanceLocal(inst domain.Instance) error {
 		}
 	}
 
-	// Deploy client tools
+	// Deploy client tools and CLI binaries
 	if err := c.deployClientToolsLocal(inst); err != nil {
 		utils.Warn("Failed to deploy client tools: %v", err)
 	}
@@ -405,83 +435,189 @@ func (c *Composer) deployLibrariesLocal(inst domain.Instance) error {
 
 // deployLocalCLI deploys CLI tools locally
 func (c *Composer) deployLocalCLI() error {
-	cliDir := filepath.Join(c.domain.BuildRoot, "bin")
-	localDir := filepath.Join(c.domainPath, "bin")
+	utils.Info("Deploying pharos client at localhost")
 
-	// Create local bin directory
-	if err := os.MkdirAll(localDir, 0755); err != nil {
-		return fmt.Errorf("failed to create local bin directory: %w", err)
-	}
+	// Create local client directory structure
+	localClientDir := filepath.Join(c.domainPath, "bin")
+	clientBinDir := filepath.Join(localClientDir, "bin")
+	clientConfDir := filepath.Join(localClientDir, "conf")
 
-	// Copy CLI tools
-	tools := []string{"pharos_cli"}
-	for _, tool := range tools {
-		srcPath := filepath.Join(cliDir, tool)
-		destPath := filepath.Join(localDir, tool)
-
-		if _, err := os.Stat(srcPath); err != nil {
-			utils.Warn("CLI tool %s not found at %s", tool, srcPath)
-			continue
-		}
-
-		if err := copyFile(srcPath, destPath); err != nil {
-			return fmt.Errorf("failed to copy CLI tool %s: %w", tool, err)
-		}
-
-		if err := os.Chmod(destPath, 0755); err != nil {
-			return fmt.Errorf("failed to make CLI tool %s executable: %w", tool, err)
+	// Create directories
+	for _, dir := range []string{localClientDir, clientBinDir, clientConfDir} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("failed to create directory %s: %w", dir, err)
 		}
 	}
 
-	utils.Info("CLI tools deployed to %s", localDir)
+	// List of CLI binaries to deploy (matching Python version)
+	cliBinaries := []string{
+		"pharos_cli",
+		"etcdctl",
+		"meta_tool",
+	}
+
+	// Deploy CLI binaries
+	for _, binary := range cliBinaries {
+		var srcPath string
+
+		// Search for binary
+		searchPaths := []string{
+			filepath.Join(c.domain.BuildRoot, "bin", binary),
+			filepath.Join("bin", binary),
+			filepath.Join("../bin", binary),
+			filepath.Join("../../bin", binary),
+		}
+
+		for _, path := range searchPaths {
+			if _, err := os.Stat(path); err == nil {
+				srcPath = path
+				break
+			}
+		}
+
+		if srcPath != "" {
+			// Copy to both local bin and client bin
+			destPaths := []string{
+				filepath.Join(localClientDir, binary),
+				filepath.Join(clientBinDir, binary),
+			}
+
+			for _, dest := range destPaths {
+				if err := copyFile(srcPath, dest); err != nil {
+					utils.Warn("Failed to copy %s to %s: %v", binary, dest, err)
+				} else {
+					if err := os.Chmod(dest, 0755); err == nil {
+						utils.Info("Deployed %s -> %s", binary, dest)
+					}
+				}
+			}
+		} else {
+			utils.Warn("CLI binary %s not found", binary)
+		}
+	}
+
+	// Deploy libraries
+	libraries := []string{"libevmone.so", "VERSION"}
+	for _, lib := range libraries {
+		var srcPath string
+
+		searchPaths := []string{
+			filepath.Join(c.domain.BuildRoot, "bin", lib),
+			filepath.Join("bin", lib),
+			filepath.Join("../bin", lib),
+			filepath.Join("../../bin", lib),
+		}
+
+		for _, path := range searchPaths {
+			if _, err := os.Stat(path); err == nil {
+				srcPath = path
+				break
+			}
+		}
+
+		if srcPath != "" {
+			dest := filepath.Join(clientBinDir, lib)
+			if err := copyFile(srcPath, dest); err != nil {
+				utils.Warn("Failed to copy library %s: %v", lib, err)
+			}
+		}
+	}
+
+	// Copy genesis configuration if exists
+	if c.domain.GenesisConf != "" {
+		if _, err := os.Stat(c.domain.GenesisConf); err == nil {
+			dest := filepath.Join(clientConfDir, "genesis.conf")
+			if err := copyFile(c.domain.GenesisConf, dest); err != nil {
+				utils.Warn("Failed to copy genesis.conf: %v", err)
+			}
+		}
+	}
+
+	utils.Info("CLI tools deployed to %s", localClientDir)
 	return nil
 }
 
 // deployClientToolsLocal deploys client tools to instance directory
 func (c *Composer) deployClientToolsLocal(inst domain.Instance) error {
-	// Check if we have aldaba_cli/pharos_cli
-	tools := []string{"aldaba_cli", "pharos_cli"}
+	// List of CLI tools that need to be deployed (matching Python version)
+	cliTools := []string{
+		"pharos_cli",    // PHAROS_CLI
+		"etcdctl",       // ETCD_CTL_BIN
+		"meta_tool",     // SVC_META_TOOL
+	}
 
-	for _, tool := range tools {
-		var srcPath string
+	// List of libraries
+	libraries := []string{
+		"libevmone.so",  // EVMONE_SO
+		"VERSION",       // PHAROS_VERSION
+	}
 
-		// Try multiple locations
-		if c.domain.BuildRoot != "" {
-			srcPath = filepath.Join(c.domain.BuildRoot, "bin", tool)
-			if _, err := os.Stat(srcPath); os.IsNotExist(err) {
-				srcPath = ""
-			}
-		}
-
-		if srcPath == "" {
-			srcPath = filepath.Join("bin", tool)
-			if _, err := os.Stat(srcPath); os.IsNotExist(err) {
-				srcPath = ""
-			}
-		}
-
-		if srcPath == "" {
-			srcPath = filepath.Join("..", "bin", tool)
-			if _, err := os.Stat(srcPath); os.IsNotExist(err) {
-				srcPath = ""
-			}
-		}
-
-		if srcPath != "" {
-			destPath := filepath.Join(inst.Dir, "bin", tool)
-			if err := copyFile(srcPath, destPath); err != nil {
-				utils.Warn("Failed to copy client tool %s: %v", tool, err)
-			} else {
-				if err := os.Chmod(destPath, 0755); err != nil {
-					utils.Warn("Failed to make client tool %s executable: %v", tool, err)
-				} else {
-					utils.Info("Deployed client tool: %s -> %s", srcPath, destPath)
-				}
-			}
-			break  // Found one, that's enough
+	// Deploy CLI tools
+	for _, tool := range cliTools {
+		if err := c.deployBinaryToLocal(inst, tool); err != nil {
+			utils.Warn("Failed to deploy CLI tool %s: %v", tool, err)
 		}
 	}
 
+	// Deploy libraries
+	for _, lib := range libraries {
+		if err := c.deployBinaryToLocal(inst, lib); err != nil {
+			utils.Warn("Failed to deploy library %s: %v", lib, err)
+		}
+	}
+
+	return nil
+}
+
+// deployBinaryToLocal deploys a binary or library to local instance
+func (c *Composer) deployBinaryToLocal(inst domain.Instance, binaryName string) error {
+	var srcPath string
+
+	// Try multiple locations to find the binary
+	searchPaths := []string{}
+
+	if c.domain.BuildRoot != "" {
+		searchPaths = append(searchPaths, filepath.Join(c.domain.BuildRoot, "bin", binaryName))
+	}
+
+	searchPaths = append(searchPaths,
+		filepath.Join("bin", binaryName),
+		filepath.Join("../bin", binaryName),
+		filepath.Join("../../bin", binaryName),
+	)
+
+	// Try all paths
+	for _, path := range searchPaths {
+		if _, err := os.Stat(path); err == nil {
+			srcPath = path
+			break
+		}
+	}
+
+	if srcPath == "" {
+		return fmt.Errorf("binary %s not found in search paths", binaryName)
+	}
+
+	destPath := filepath.Join(inst.Dir, "bin", binaryName)
+
+	// Ensure destination directory exists
+	if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+		return fmt.Errorf("failed to create destination directory: %w", err)
+	}
+
+	// Copy file
+	if err := copyFile(srcPath, destPath); err != nil {
+		return fmt.Errorf("failed to copy %s: %w", binaryName, err)
+	}
+
+	// Make executable if it's a binary (not a library or version file)
+	if !strings.Contains(binaryName, ".so") && binaryName != "VERSION" {
+		if err := os.Chmod(destPath, 0755); err != nil {
+			return fmt.Errorf("failed to make %s executable: %w", binaryName, err)
+		}
+	}
+
+	utils.Info("Deployed %s: %s -> %s", binaryName, srcPath, destPath)
 	return nil
 }
 
@@ -594,24 +730,54 @@ func (c *Composer) cleanLocal(inst domain.Instance, cleanMeta bool) error {
 // cleanRemote cleans up remote instance data
 func (c *Composer) cleanRemote(host string, instances []domain.Instance, cleanMeta bool) error {
 	for _, inst := range instances {
+		// Create a context with timeout for SSH commands
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
 		// Remove data directory
-		cmd := exec.Command("ssh", fmt.Sprintf("%s@%s", c.domain.RunUser, host),
+		cmd := exec.CommandContext(ctx, "ssh",
+			"-o", "ConnectTimeout=5",
+			"-o", "BatchMode=yes",
+			"-o", "StrictHostKeyChecking=no",
+			fmt.Sprintf("%s@%s", c.domain.RunUser, host),
 			fmt.Sprintf("rm -rf %s/data", inst.Dir))
-		cmd.Run() // Ignore errors for cleanup
+
+		if err := cmd.Run(); err != nil {
+			utils.Warn("Failed to remove remote data directory: %v", err)
+		}
 
 		// Remove log directory
-		cmd = exec.Command("ssh", fmt.Sprintf("%s@%s", c.domain.RunUser, host),
+		ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
+		cmd = exec.CommandContext(ctx, "ssh",
+			"-o", "ConnectTimeout=5",
+			"-o", "BatchMode=yes",
+			"-o", "StrictHostKeyChecking=no",
+			fmt.Sprintf("%s@%s", c.domain.RunUser, host),
 			fmt.Sprintf("rm -rf %s/logs", inst.Dir))
-		cmd.Run() // Ignore errors for cleanup
+		cancel()
+
+		if err := cmd.Run(); err != nil {
+			utils.Warn("Failed to remove remote log directory: %v", err)
+		}
 
 		// Remove metadata if requested
 		if cleanMeta {
-			cmd = exec.Command("ssh", fmt.Sprintf("%s@%s", c.domain.RunUser, host),
+			ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
+			cmd = exec.CommandContext(ctx, "ssh",
+				"-o", "ConnectTimeout=5",
+				"-o", "BatchMode=yes",
+				"-o", "StrictHostKeyChecking=no",
+				fmt.Sprintf("%s@%s", c.domain.RunUser, host),
 				fmt.Sprintf("rm -rf %s/meta", inst.Dir))
-			cmd.Run() // Ignore errors for cleanup
+			cancel()
+
+			if err := cmd.Run(); err != nil {
+				utils.Warn("Failed to remove remote meta directory: %v", err)
+			}
 		}
 	}
 
 	return nil
 }
+
 
