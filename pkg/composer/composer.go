@@ -95,17 +95,30 @@ func (c *Composer) Stop(service string) error {
 
 func (c *Composer) getInstances(service string) map[string][]domain.Instance {
 	instances := make(map[string][]domain.Instance)
-	
-	for _, inst := range c.domain.Cluster {
+
+	for name, inst := range c.domain.Cluster {
 		if service == "" || inst.Service == service {
+			// Set the name if it's empty
+			if inst.Name == "" {
+				inst.Name = name
+			}
+
+			// Set default dir if empty
+			if inst.Dir == "" && c.domain.DeployDir != "" {
+				inst.Dir = filepath.Join(c.domain.DeployDir, inst.Name)
+			}
+
 			host := inst.Host
 			if host == "" {
 				host = inst.IP
 			}
+			if host == "" {
+				host = "127.0.0.1"
+			}
 			instances[host] = append(instances[host], inst)
 		}
 	}
-	
+
 	return instances
 }
 
@@ -161,22 +174,39 @@ func (c *Composer) stopService(service string) error {
 
 func (c *Composer) startInstance(inst domain.Instance) error {
 	utils.Info("Starting instance: %s", inst.Name)
-	
+
 	workDir := filepath.Join(inst.Dir, "bin")
 	binary := c.getBinaryName(inst.Service)
-	
+
+	// Try to find binary in multiple locations
+	binaryPath := filepath.Join(workDir, binary)
+	if _, err := os.Stat(binaryPath); os.IsNotExist(err) {
+		// Try in instance dir
+		binaryPath = filepath.Join(inst.Dir, "bin", binary)
+		if _, err := os.Stat(binaryPath); os.IsNotExist(err) {
+			return fmt.Errorf("binary not found: %s", binary)
+		}
+	}
+
 	// Create start command
-	cmd := exec.Command(binary, "-s", inst.Service, "-d")
-	
+	cmd := exec.Command(binaryPath, "-d")
+
 	cmd.Dir = workDir
-	
+
 	// Set environment variables
 	cmd.Env = os.Environ()
 	for k, v := range inst.Env {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
 	}
-	
-	return cmd.Start()
+
+	// Start process in background
+	err := cmd.Start()
+	if err != nil {
+		return fmt.Errorf("failed to start binary %s: %w", binaryPath, err)
+	}
+
+	utils.Info("Started instance %s with PID %d", inst.Name, cmd.Process.Pid)
+	return nil
 }
 
 func (c *Composer) stopInstance(inst domain.Instance) error {
@@ -190,5 +220,23 @@ func (c *Composer) stopInstance(inst domain.Instance) error {
 
 
 func (c *Composer) getBinaryName(service string) string {
-	return "pharos"
+	// Map service names to binary names
+	switch service {
+	case "light", "aldaba", "pharos":
+		return "pharos"  // or "aldaba" depending on the actual binary
+	case "etcd":
+		return "etcd"
+	case "storage", "mygrid":
+		return "storage"
+	case "portal":
+		return "portal"
+	case "txpool":
+		return "txpool"
+	case "controller", "dog":
+		return "pharos"
+	case "compute":
+		return "compute"
+	default:
+		return "pharos"
+	}
 }
