@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"pharos-ops/pkg/domain"
@@ -26,7 +28,7 @@ func (c *Composer) Deploy(service string) error {
 	instances := c.getInstances(service)
 
 	// Group instances by host
-	hostInstances := make(map[string][]domain.Instance)
+	hostInstances := make(map[string][]*domain.Instance)
 	for _, instList := range instances {
 		for _, inst := range instList {
 			host := inst.Host
@@ -70,9 +72,12 @@ func (c *Composer) Deploy(service string) error {
 		}
 
 		// Sync client tools to remote host if needed
-		if deployClientHost != "127.0.0.1" && deployClientHost != "localhost" {
+		// In Python version: sync if not local OR local_client_dir != remote_client_dir
+		// Since we're deploying to the same host (127.0.0.1), we still need to sync
+		// to create the client directory in the deploy location
+		if deployClientHost != "" {
 			if err := c.syncClientToRemote(deployClientHost); err != nil {
-				utils.Warn("Failed to sync client to remote host: %v", err)
+				utils.Warn("Failed to sync client to deploy directory: %v", err)
 			}
 		}
 	}
@@ -83,7 +88,7 @@ func (c *Composer) Deploy(service string) error {
 
 // deployHost deploys binaries and configuration to a specific host
 // Uses SSH for all hosts including localhost
-func (c *Composer) deployHost(host string, instances []domain.Instance, service string, deployBinary, deployConf bool) error {
+func (c *Composer) deployHost(host string, instances []*domain.Instance, service string, deployBinary, deployConf bool) error {
 	utils.Info("Deploying instances to host: %s", host)
 
 	// Make pharos root workspace
@@ -98,7 +103,7 @@ func (c *Composer) deployHost(host string, instances []domain.Instance, service 
 
 
 // getInstanceNames returns names of instances
-func getInstanceNames(instances []domain.Instance) []string {
+func getInstanceNames(instances []*domain.Instance) []string {
 	var names []string
 	for _, inst := range instances {
 		names = append(names, inst.Name)
@@ -107,7 +112,7 @@ func getInstanceNames(instances []domain.Instance) []string {
 }
 
 // deployToRemoteHost deploys to a remote host via SSH
-func (c *Composer) deployToRemoteHost(host string, instances []domain.Instance, service string, deployBinary, deployConf bool, deployDir string) error {
+func (c *Composer) deployToRemoteHost(host string, instances []*domain.Instance, service string, deployBinary, deployConf bool, deployDir string) error {
 	utils.Info("Deploying to host: %s", host)
 
 	// For localhost, use current user; for remote hosts, use run_user
@@ -148,6 +153,34 @@ func (c *Composer) deployToRemoteHost(host string, instances []domain.Instance, 
 	if deployConf {
 		if err := c.deployConfigurationRemote(sshClient, instances, deployDir); err != nil {
 			return fmt.Errorf("failed to deploy configuration remotely: %w", err)
+		}
+	}
+
+	// Create instance directories (matching Python's _make_workspace for each instance)
+	for _, inst := range instances {
+		instDir := inst.Dir
+		if instDir == "" {
+			instDir = filepath.Join(deployDir, inst.Name)
+		}
+
+		utils.Info("Creating workspace for instance %s: %s", inst.Name, instDir)
+
+		// Create instance root directory first
+		if err := sshClient.MkdirAll(instDir, 0755); err != nil {
+			utils.Error("Failed to create instance root directory %s: %v", instDir, err)
+		} else {
+			utils.Info("Successfully created instance root directory: %s", instDir)
+		}
+
+		// Create instance workspace directories
+		instDirs := []string{"bin", "conf", "log", "data", "certs"}
+		for _, dir := range instDirs {
+			instPath := filepath.Join(instDir, dir)
+			if err := sshClient.MkdirAll(instPath, 0755); err != nil {
+				utils.Warn("Failed to create instance directory %s: %v", instPath, err)
+			} else {
+				utils.Info("Successfully created instance directory: %s", instPath)
+			}
 		}
 	}
 
@@ -256,7 +289,7 @@ func (c *Composer) deployLocalCLI() error {
 		"chain_id":   c.domain.ChainID,
 		"domain_id":  c.domain.DomainLabel,
 		"data_path":  "/tmp/pharos_data", // Default value, should be configured
-		"mygrid_env_path": "../conf/mygrid.light.env.json",
+		"mygrid_env_path": "../conf/mygrid.env.json",
 	}
 
 	cliConfFile := filepath.Join(cliBinDir, "cli.conf")
@@ -264,10 +297,114 @@ func (c *Composer) deployLocalCLI() error {
 		utils.Warn("Failed to write cli.conf: %v", err)
 	}
 
+	// Generate mygrid_genesis.conf (matching Python's MYGRID_GENESIS_CONFIG_FILENAME)
+	mygridGenesisConf := map[string]interface{}{
+		"mygrid": map[string]interface{}{
+			"mygrid_client_id":       "0",
+			"mygrid_conf_path":       "../conf/mygrid.conf.json",
+			"mygrid_env_path":        "../conf/mygrid.env.json",
+			"mygrid_client_deploy_mode": func() string {
+				if c.isLight {
+					return "light"
+				}
+				return "ultra"
+			}(),
+		},
+	}
+
+	mygridGenesisFile := filepath.Join(cliBinDir, "mygrid_genesis.conf")
+	if err := writeJSON(mygridGenesisFile, mygridGenesisConf); err != nil {
+		utils.Warn("Failed to write mygrid_genesis.conf: %v", err)
+	}
+
+	// Generate meta_service.conf (matching Python's META_SERVICE_CONFIG_FILENAME)
+	metaServiceConf := map[string]interface{}{
+		"meta_service": map[string]interface{}{
+			"myid": 0,
+			"etcd": map[string]interface{}{
+				"enable": 0,
+			},
+			"storage": map[string]interface{}{
+				"deploy_mode": func() string {
+					if c.isLight {
+						return "light"
+					}
+					return "ultra"
+				}(),
+				"role":         "client",
+				"data_path":    "/tmp/pharos_data",
+				"conf_path":    "../conf/mygrid.conf.json",
+				"env_path":     "../conf/mygrid.env.json",
+			},
+		},
+	}
+
+	metaServiceFile := filepath.Join(cliBinDir, "meta_service.conf")
+	if err := writeJSON(metaServiceFile, metaServiceConf); err != nil {
+		utils.Warn("Failed to write meta_service.conf: %v", err)
+	}
+
+	// Copy client certificates directory
+	clientCertDir := filepath.Join(cliBinDir, "client")
+	if err := os.MkdirAll(clientCertDir, 0755); err != nil {
+		utils.Warn("Failed to create client cert dir: %v", err)
+	} else {
+		// Copy certificate files from Secret.Client.Files
+		certFiles := map[string]string{
+			"ca.crt":   c.domain.Secret.Client.Files["ca_cert"],
+			"client.crt": c.domain.Secret.Client.Files["cert"],
+			"client.key": c.domain.Secret.Client.Files["key"],
+		}
+		for certFile, certPath := range certFiles {
+			if certPath != "" {
+				dstPath := filepath.Join(clientCertDir, certFile)
+				if err := copyFile(certPath, dstPath); err != nil {
+					utils.Warn("Failed to copy %s: %v", certFile, err)
+				}
+			}
+		}
+	}
+
+	// Generate mygrid.conf.json (simplified version)
+	mygridConf := map[string]interface{}{
+		"mygrid": map[string]interface{}{
+			"env": map[string]interface{}{
+				"enable_adaptive": false,
+				"meta_store_disk": "/data/pharos-node/meta_store",
+				"project_data_path": "data",
+			},
+		},
+	}
+
+	mygridConfFile := filepath.Join(filepath.Join(localClientDir, "conf"), "mygrid.conf.json")
+	if err := writeJSON(mygridConfFile, mygridConf); err != nil {
+		utils.Warn("Failed to write mygrid.conf.json: %v", err)
+	}
+
+	// Generate mygrid.env.json (simplified version)
+	mygridEnv := map[string]interface{}{
+		"mygrid_env": map[string]interface{}{
+			"enable_adaptive": false,
+			"meta_store_disk": "/data/pharos-node/meta_store",
+			"project_data_path": "data",
+			"mode": func() string {
+				if c.isLight {
+					return "light"
+				}
+				return "ultra"
+				}(),
+		},
+	}
+
+	mygridEnvFile := filepath.Join(filepath.Join(localClientDir, "conf"), "mygrid.env.json")
+	if err := writeJSON(mygridEnvFile, mygridEnv); err != nil {
+		utils.Warn("Failed to write mygrid.env.json: %v", err)
+	}
+
 	return nil
 }
 
-// syncClientToRemote syncs client tools to remote host
+// syncClientToRemote syncs client tools to remote host using rsync (matching Python version)
 func (c *Composer) syncClientToRemote(host string) error {
 	utils.Info("Syncing client tools to remote host: %s", host)
 
@@ -287,40 +424,41 @@ func (c *Composer) syncClientToRemote(host string) error {
 		return fmt.Errorf("failed to connect: %w", err)
 	}
 
-	// Remote client directory
-	remoteClientDir := filepath.Join(c.domain.DeployDir, "client")
-	if c.domain.DeployDir == "" {
-		remoteClientDir = filepath.Join(c.domain.BuildRoot, "domain", c.domain.DomainLabel, "client")
-	}
-
-	// Create remote client directories
-	if err := sshClient.MkdirAll(filepath.Join(remoteClientDir, "bin"), 0755); err != nil {
-		return fmt.Errorf("failed to create remote client bin dir: %w", err)
-	}
-
-	if err := sshClient.MkdirAll(filepath.Join(remoteClientDir, "conf"), 0755); err != nil {
-		return fmt.Errorf("failed to create remote client conf dir: %w", err)
-	}
-
-	// Sync CLI binaries with --ignore-existing behavior
+	// Local and remote client directories
 	localClientDir := filepath.Join("/tmp", c.domain.ChainID, c.domain.DomainLabel, "client")
-	localBinDir := filepath.Join(localClientDir, "bin")
 
-	// List of CLI binaries (excluding VERSION)
-	cliBinaries := []string{"pharos_cli", "etcdctl", "libevmone.so", "meta_tool"}
+	// Python version syncs local_client_dir to deploy_dir (not deploy_dir/client)
+	// This creates /data/pharos-node/domain/client directory structure
+	deployDir := c.domain.DeployDir
+	if deployDir == "" {
+		deployDir = filepath.Join(c.domain.BuildRoot, "domain", c.domain.DomainLabel)
+	}
 
-	for _, binary := range cliBinaries {
-		localPath := filepath.Join(localBinDir, binary)
-		remotePath := filepath.Join(filepath.Join(remoteClientDir, "bin"), binary)
+	// Make sure deploy directory exists
+	if err := sshClient.MkdirAll(deployDir, 0755); err != nil {
+		return fmt.Errorf("failed to create deploy directory: %w", err)
+	}
 
-		// Only sync if local file exists
-		if _, err := os.Stat(localPath); err == nil {
-			if err := sshClient.UploadFile(localPath, remotePath); err != nil {
-				utils.Warn("Failed to upload %s to remote: %v", binary, err)
-			}
+	// Use cp or rsync to sync the client directory (matching Python's behavior)
+	utils.Info("Syncing client directory from %s to %s", localClientDir, deployDir)
+
+	// For localhost, Python uses cp -aLv, for remote hosts uses rsync
+	if host == "127.0.0.1" || host == "localhost" {
+		// Use cp -aLv for localhost (matching Python's LocalConnection.sync)
+		cmd := exec.Command("cp", "-aLv", localClientDir, deployDir)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to copy client directory locally: %v, output: %s", err, string(output))
+		}
+	} else {
+		// Use rsync for remote hosts
+		// Add trailing slash to localPath to sync contents, not the directory itself
+		localSource := localClientDir + "/"
+		if err := sshClient.RsyncDirectory(localSource, deployDir, "-avzL"); err != nil {
+			return fmt.Errorf("failed to sync client directory to remote: %w", err)
 		}
 	}
 
+	utils.Info("✓ Client directory synced successfully")
 	return nil
 }
 
@@ -347,8 +485,8 @@ func (c *Composer) syncCLIBinaries(localClientDir, cliBinDir string) error {
 }
 
 // deployBinariesRemote deploys binaries to remote host
-func (c *Composer) deployBinariesRemote(sshClient *ssh.Client, instances []domain.Instance, deployDir string) error {
-	// Collect all required binaries
+func (c *Composer) deployBinariesRemote(sshClient *ssh.Client, instances []*domain.Instance, deployDir string) error {
+	// Collect all required binaries (including pharos_light for light instances)
 	binaries := make(map[string]bool)
 	for _, inst := range instances {
 		binaries[c.getBinaryName(inst.Service)] = true
@@ -381,8 +519,8 @@ func (c *Composer) deployBinariesRemote(sshClient *ssh.Client, instances []domai
 		// Check if source file exists
 		fileInfo, err := os.Stat(srcPath)
 		if err != nil {
-			utils.Error("Source binary not found: %s (error: %v)", srcPath, err)
-			return fmt.Errorf("source binary not found: %s", srcPath)
+			utils.Warn("Source binary not found: %s (error: %v)", srcPath, err)
+			continue  // Skip missing binary instead of failing
 		}
 
 		utils.Info("Uploading %s: %s -> %s (size: %d bytes)", binary, srcPath, dstPath, fileInfo.Size())
@@ -419,10 +557,17 @@ func (c *Composer) deployBinariesRemote(sshClient *ssh.Client, instances []domai
 		}
 		instBinDir := filepath.Join(instDir, "bin")
 
-		// Create instance bin directory
-		sshClient.MkdirAll(instBinDir, 0755)
+		// Create instance directories first
+		// Ensure instance root directory exists before creating bin directory
+		if err := sshClient.MkdirAll(instDir, 0755); err != nil {
+			utils.Warn("Failed to create instance directory %s: %v", instDir, err)
+		}
+		if err := sshClient.MkdirAll(instBinDir, 0755); err != nil {
+			utils.Warn("Failed to create instance bin directory %s: %v", instBinDir, err)
+		}
 
-		// Create symlink to binary
+		// For all instances (including light), create symlinks to shared binaries (matching Python version)
+		// Python version: all instances use symlinks, including light
 		binaryName := c.getBinaryName(inst.Service)
 		binarySrc := filepath.Join(deployBinDir, binaryName)
 		binaryTarget := filepath.Join(instBinDir, binaryName)
@@ -460,7 +605,7 @@ func (c *Composer) deployBinariesRemote(sshClient *ssh.Client, instances []domai
 }
 
 // deployConfigurationRemote deploys configuration files to remote host
-func (c *Composer) deployConfigurationRemote(sshClient *ssh.Client, instances []domain.Instance, deployDir string) error {
+func (c *Composer) deployConfigurationRemote(sshClient *ssh.Client, instances []*domain.Instance, deployDir string) error {
 	for _, inst := range instances {
 		instDir := inst.Dir
 		if instDir == "" {
@@ -477,7 +622,12 @@ func (c *Composer) deployConfigurationRemote(sshClient *ssh.Client, instances []
 				"init_config": map[string]interface{}{
 					"mygrid_client_id":         inst.Name,
 					"service_name":             inst.Service,
-					"mygrid_client_deploy_mode": "ultra", // TODO: Check for light mode
+					"mygrid_client_deploy_mode": func() string {
+					if inst.Service == "light" {
+						return "light"
+					}
+					return "ultra"
+				}(),
 				},
 			}
 
@@ -502,6 +652,23 @@ func (c *Composer) deployConfigurationRemote(sshClient *ssh.Client, instances []
 				utils.Error("Failed to upload launch.conf for %s: %v", inst.Name, err)
 			} else {
 				utils.Info("Successfully uploaded launch.conf for %s", inst.Name)
+			}
+
+			// Generate cubenet.conf for dog and light services
+			if inst.Service == "dog" || inst.Service == "light" {
+				if err := c.deployCubenetConf(sshClient, inst); err != nil {
+					return fmt.Errorf("failed to deploy cubenet.conf for %s: %w", inst.Name, err)
+				}
+			}
+
+			// Generate mygrid config files (matching Python's deploy_host_conf)
+			if err := c.deployMygridConfigs(sshClient, inst); err != nil {
+				return fmt.Errorf("failed to deploy mygrid configs for %s: %w", inst.Name, err)
+			}
+
+			// Generate monitor.conf (matching Python's deploy_host_conf)
+			if err := c.deployMonitorConf(sshClient, inst); err != nil {
+				return fmt.Errorf("failed to deploy monitor.conf for %s: %w", inst.Name, err)
 			}
 		}
 	}
@@ -599,7 +766,7 @@ func (c *Composer) cleanService(service string, cleanMeta bool) error {
 }
 
 // cleanInstance cleans a specific instance
-func (c *Composer) cleanInstance(instanceName string, cleanMeta bool, inst domain.Instance) error {
+func (c *Composer) cleanInstance(instanceName string, cleanMeta bool, inst *domain.Instance) error {
 	utils.Info("Cleaning instance %s on %s", instanceName, inst.IP)
 
 	// Determine instance directory
@@ -670,6 +837,241 @@ func (c *Composer) cleanInstanceRemote(host, instanceName string, cleanMeta bool
 				utils.Warn("Failed to remove file %s: %v", pattern, err)
 			}
 		}
+	}
+
+	return nil
+}
+
+// deployCubenetConf deploys cubenet.conf for dog and light services
+// This matches Python's implementation exactly
+func (c *Composer) deployCubenetConf(sshClient *ssh.Client, inst *domain.Instance) error {
+	instDir := inst.Dir
+	if instDir == "" {
+		instDir = "/data/pharos-node/domain/" + inst.Name
+	}
+
+	// Read dog.conf
+	dogConfFile := filepath.Join(c.domain.BuildRoot, "conf", "dog.conf")
+	data, err := os.ReadFile(dogConfFile)
+	if err != nil {
+		return fmt.Errorf("failed to read dog.conf: %w", err)
+	}
+
+	var dogConf map[string]interface{}
+	if err := json.Unmarshal(data, &dogConf); err != nil {
+		return fmt.Errorf("failed to parse dog.conf: %w", err)
+	}
+
+	// Check if cubenet is enabled
+	config, ok := dogConf["config"].(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("no config section in dog.conf")
+	}
+
+	cubenet, ok := config["cubenet"].(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("no cubenet configuration in dog.conf")
+	}
+
+	cubenetEnabled, ok := cubenet["enabled"].(bool)
+	if !ok || !cubenetEnabled {
+		utils.Info("cubenet is disabled, skipping cubenet.conf generation")
+		return nil
+	}
+
+	// Read cubenet config file path
+	configFile, ok := cubenet["config_file"].(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("no cubenet config_file in dog.conf")
+	}
+
+	configFilePath, ok := configFile["filepath"].(string)
+	if !ok {
+		return fmt.Errorf("no filepath in cubenet config_file")
+	}
+
+	// Read cubenet configuration
+	// configFilePath might be relative to dog.conf directory
+	var cubenetConfigPath string
+	if filepath.IsAbs(configFilePath) {
+		cubenetConfigPath = configFilePath
+	} else {
+		// Make it relative to dog.conf's directory
+		cubenetConfigPath = filepath.Join(filepath.Dir(dogConfFile), configFilePath)
+	}
+
+	data, err = os.ReadFile(cubenetConfigPath)
+	if err != nil {
+		return fmt.Errorf("failed to read cubenet config file %s: %w", cubenetConfigPath, err)
+	}
+
+	var cubenetConf map[string]interface{}
+	if err := json.Unmarshal(data, &cubenetConf); err != nil {
+		return fmt.Errorf("failed to parse cubenet config: %w", err)
+	}
+
+	// Update NODE_ID
+	nodeID := inst.Env["NODE_ID"]
+	if nodeID == "" {
+		nodeID = "0"
+	}
+	cubenetConf["cubenet"].(map[string]interface{})["p2p"].(map[string]interface{})["nid"] = nodeID
+
+	// Update port based on DOMAIN_LISTEN_URLS0
+	if domainListenURLs, exists := inst.Env["DOMAIN_LISTEN_URLS0"]; exists {
+		parts := strings.Split(domainListenURLs, ":")
+		if len(parts) >= 3 {
+			portStr := parts[2]
+			if port, err := strconv.Atoi(portStr); err == nil {
+				portOffset := int(cubenet["port_offset"].(float64))
+				p2p := cubenetConf["cubenet"].(map[string]interface{})["p2p"].(map[string]interface{})
+				if hostsInterface, ok := p2p["host"]; ok {
+					if hosts, ok := hostsInterface.([]interface{}); ok && len(hosts) > 0 {
+						if host0, ok := hosts[0].(map[string]interface{}); ok {
+							host0["port"] = port + portOffset
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Upload domain key to certs directory
+	domainKeyFile := filepath.Join(instDir, "certs", "domain_key")
+	if c.domain.Secret.Domain.Files["key"] != "" {
+		// Check if key file exists
+		if _, err := os.Stat(c.domain.Secret.Domain.Files["key"]); err != nil {
+			utils.Warn("Domain key file not found: %s, skipping upload", c.domain.Secret.Domain.Files["key"])
+		} else {
+			if err := sshClient.UploadFile(c.domain.Secret.Domain.Files["key"], domainKeyFile); err != nil {
+				utils.Warn("Failed to upload domain key: %v", err)
+			}
+		}
+	}
+
+	// Set private key file path
+	cubenetConf["cubenet"].(map[string]interface{})["p2p"].(map[string]interface{})["private_key_file"] = domainKeyFile
+
+	// Write cubenet.conf to temporary file
+	tmpCubenetConf := filepath.Join(os.TempDir(), fmt.Sprintf("cubenet_conf_%s.json", inst.Name))
+	if err := writeJSON(tmpCubenetConf, cubenetConf); err != nil {
+		return fmt.Errorf("failed to write cubenet.conf: %w", err)
+	}
+	defer os.Remove(tmpCubenetConf)
+
+	// Upload to remote
+	remoteCubenetConf := filepath.Join(instDir, "conf", "cubenet.conf")
+	if err := sshClient.UploadFile(tmpCubenetConf, remoteCubenetConf); err != nil {
+		return fmt.Errorf("failed to upload cubenet.conf: %w", err)
+	}
+
+	return nil
+}
+
+// deployMygridConfigs deploys mygrid configuration files
+// This matches Python's deploy_host_conf exactly
+func (c *Composer) deployMygridConfigs(sshClient *ssh.Client, inst *domain.Instance) error {
+	instDir := inst.Dir
+	if instDir == "" {
+		instDir = "/data/pharos-node/domain/" + inst.Name
+	}
+
+	// Read mygrid.conf.json from build_root/conf (matching Python)
+	mygridConfFile := filepath.Join(c.domain.BuildRoot, "conf", "mygrid.conf.json")
+	data, err := os.ReadFile(mygridConfFile)
+	if err != nil {
+		// Create default if file doesn't exist
+		utils.Warn("mygrid.conf.json not found at %s, creating default", mygridConfFile)
+		mygridConf := map[string]interface{}{
+			"mygrid": map[string]interface{}{
+				"env": map[string]interface{}{
+					"enable_adaptive": false,
+					"meta_store_disk": "/data/pharos-node/meta_store",
+					"project_data_path": "data",
+				},
+			},
+		}
+		if data, err = json.Marshal(mygridConf); err != nil {
+			return fmt.Errorf("failed to marshal default mygrid.conf.json: %w", err)
+		}
+	}
+
+	// Write to temp file and upload
+	tmpFile := filepath.Join(os.TempDir(), fmt.Sprintf("mygrid_conf_%s.json", inst.Name))
+	if err := os.WriteFile(tmpFile, data, 0644); err != nil {
+		return fmt.Errorf("failed to write temp mygrid.conf.json: %w", err)
+	}
+	defer os.Remove(tmpFile)
+
+	remotePath := filepath.Join(instDir, "conf", "mygrid.conf.json")
+	if err := sshClient.UploadFile(tmpFile, remotePath); err != nil {
+		return fmt.Errorf("failed to upload mygrid.conf.json: %w", err)
+	}
+
+	// Read mygrid.env.json (this is generated by Python, not from file)
+	// This matches Python's _mygrid_env_json
+	mygridEnv := map[string]interface{}{
+		"mygrid_env": map[string]interface{}{
+			"enable_adaptive": false,
+			"meta_store_disk": "/data/pharos-node/meta_store",
+			"project_data_path": "data",
+			"mode": func() string {
+				if inst.Service == "light" {
+					return "light"
+				}
+				return "ultra"
+			}(),
+		},
+	}
+
+	tmpEnvFile := filepath.Join(os.TempDir(), fmt.Sprintf("mygrid_env_%s.json", inst.Name))
+	if err := writeJSON(tmpEnvFile, mygridEnv); err != nil {
+		return fmt.Errorf("failed to write mygrid.env.json: %w", err)
+	}
+	defer os.Remove(tmpEnvFile)
+
+	remoteEnvPath := filepath.Join(instDir, "conf", "mygrid.env.json")
+	if err := sshClient.UploadFile(tmpEnvFile, remoteEnvPath); err != nil {
+		return fmt.Errorf("failed to upload mygrid.env.json: %w", err)
+	}
+
+	return nil
+}
+
+// deployMonitorConf deploys monitor configuration
+// This matches Python's deploy_host_conf exactly
+func (c *Composer) deployMonitorConf(sshClient *ssh.Client, inst *domain.Instance) error {
+	instDir := inst.Dir
+	if instDir == "" {
+		instDir = "/data/pharos-node/domain/" + inst.Name
+	}
+
+	// Read monitor.conf.json from build_root/conf (matching Python)
+	monitorConfFile := filepath.Join(c.domain.BuildRoot, "conf", "monitor.conf.json")
+	data, err := os.ReadFile(monitorConfFile)
+	if err != nil {
+		// Create default if file doesn't exist
+		utils.Warn("monitor.conf.json not found at %s, creating default", monitorConfFile)
+		monitorConf := map[string]interface{}{
+			"monitor": map[string]interface{}{
+				"enabled": false, // Default disabled
+			},
+		}
+		if data, err = json.Marshal(monitorConf); err != nil {
+			return fmt.Errorf("failed to marshal default monitor.conf.json: %w", err)
+		}
+	}
+
+	// Write to temp file and upload
+	tmpFile := filepath.Join(os.TempDir(), fmt.Sprintf("monitor_conf_%s.json", inst.Name))
+	if err := os.WriteFile(tmpFile, data, 0644); err != nil {
+		return fmt.Errorf("failed to write temp monitor.conf.json: %w", err)
+	}
+	defer os.Remove(tmpFile)
+
+	remotePath := filepath.Join(instDir, "conf", "monitor.conf")
+	if err := sshClient.UploadFile(tmpFile, remotePath); err != nil {
+		return fmt.Errorf("failed to upload monitor.conf: %w", err)
 	}
 
 	return nil

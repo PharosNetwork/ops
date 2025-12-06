@@ -368,6 +368,60 @@ func (c *Client) verifyFileMD5(localPath, remotePath string) error {
 	return nil
 }
 
+// RsyncDirectory syncs a local directory to remote host using rsync
+// Matches Python's conn.sync() method behavior
+func (c *Client) RsyncDirectory(localPath, remotePath string, rsyncOpts ...string) error {
+	// Default rsync options (matching Python)
+	defaultOpts := []string{"-avzL"}
+	if len(rsyncOpts) > 0 {
+		defaultOpts = rsyncOpts
+	}
+
+	fmt.Printf("=== Rsync Directory ===\n")
+	fmt.Printf("Local path: %s\n", localPath)
+	fmt.Printf("Remote path: %s\n", remotePath)
+	fmt.Printf("Rsync options: %v\n", defaultOpts)
+
+	// Build rsync command
+	var args []string
+	args = append(args, defaultOpts...)
+
+	// Add SSH options for remote hosts
+	if c.host != "127.0.0.1" && c.host != "localhost" {
+		args = append(args, "-e", "ssh -o StrictHostKeyChecking=no")
+	}
+
+	// Add source and destination
+	args = append(args, localPath)
+
+	if c.host == "127.0.0.1" || c.host == "localhost" {
+		// For localhost, rsync directly
+		args = append(args, remotePath)
+	} else {
+		// For remote hosts, add user@host:
+		if c.user != "" {
+			args = append(args, fmt.Sprintf("%s@%s:%s", c.user, c.host, remotePath))
+		} else {
+			args = append(args, fmt.Sprintf("%s:%s", c.host, remotePath))
+		}
+	}
+
+	fmt.Printf("Rsync command: rsync %v\n", args)
+
+	// Execute rsync
+	cmd := exec.Command("rsync", args...)
+	output, err := cmd.CombinedOutput()
+
+	if err != nil {
+		return fmt.Errorf("rsync failed: %w, output: %s", err, string(output))
+	}
+
+	fmt.Printf("Rsync output: %s\n", string(output))
+	fmt.Printf("✓ Directory sync completed\n")
+
+	return nil
+}
+
 // getSSHAgentAuth tries to get authentication from SSH agent
 func getSSHAgentAuth() (ssh.AuthMethod, error) {
 	sshAuthSock := os.Getenv("SSH_AUTH_SOCK")

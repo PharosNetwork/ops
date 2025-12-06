@@ -8,7 +8,7 @@ type Domain struct {
 	RunUser       string                 `json:"run_user"`
 	ChainProtocol string                 `json:"chain_protocol"`
 	Version       string                 `json:"version"`
-	Cluster       map[string]Instance    `json:"cluster"`
+	Cluster       map[string]*Instance    `json:"cluster"`
 	Common        CommonConfig           `json:"common"`
 	Secret        SecretConfig           `json:"secret"`
 	Docker        DockerConfig           `json:"docker"`

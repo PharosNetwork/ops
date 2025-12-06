@@ -55,7 +55,7 @@ func (c *Composer) bootstrapUltra() error {
 	return fmt.Errorf("ultra mode not supported")
 }
 
-func (c *Composer) initializeConf(inst domain.Instance) error {
+func (c *Composer) initializeConf(inst *domain.Instance) error {
 	utils.Info("Initializing configuration for instance: %s", inst.Name)
 
 	// Check if genesis.conf exists in current directory
@@ -69,7 +69,7 @@ func (c *Composer) initializeConf(inst domain.Instance) error {
 	return nil
 }
 
-func (c *Composer) generateGenesis(inst domain.Instance) error {
+func (c *Composer) generateGenesis(inst *domain.Instance) error {
 	utils.Info("Generating genesis state for instance: %s", inst.Name)
 
 	// Check if pharos_cli exists in bin directory

@@ -46,6 +46,11 @@ func New(domainFile string) (*Composer, error) {
 		isLight:    false,
 	}
 
+	// Set instance names (matching Python: instance.name = name)
+	for name, inst := range d.Cluster {
+		inst.Name = name
+	}
+
 	// Check if light mode
 	if _, exists := d.Cluster[domain.ServiceLight]; exists {
 		c.isLight = true
@@ -99,8 +104,8 @@ func (c *Composer) Stop(service string) error {
 
 
 
-func (c *Composer) getInstances(service string) map[string][]domain.Instance {
-	instances := make(map[string][]domain.Instance)
+func (c *Composer) getInstances(service string) map[string][]*domain.Instance {
+	instances := make(map[string][]*domain.Instance)
 	
 	for _, inst := range c.domain.Cluster {
 		if service == "" || inst.Service == service {
@@ -115,7 +120,7 @@ func (c *Composer) getInstances(service string) map[string][]domain.Instance {
 	return instances
 }
 
-func (c *Composer) statusInstance(inst domain.Instance) error {
+func (c *Composer) statusInstance(inst *domain.Instance) error {
 	// Check if process is running
 	cmd := exec.Command("pgrep", "-f", inst.Service)
 	output, err := cmd.Output()
@@ -165,7 +170,7 @@ func (c *Composer) stopService(service string) error {
 
 
 
-func (c *Composer) startInstance(inst domain.Instance) error {
+func (c *Composer) startInstance(inst *domain.Instance) error {
 	utils.Info("Starting instance: %s", inst.Name)
 	
 	workDir := filepath.Join(inst.Dir, "bin")
@@ -185,7 +190,7 @@ func (c *Composer) startInstance(inst domain.Instance) error {
 	return cmd.Start()
 }
 
-func (c *Composer) stopInstance(inst domain.Instance) error {
+func (c *Composer) stopInstance(inst *domain.Instance) error {
 	utils.Info("Stopping instance: %s", inst.Name)
 	
 	// Find and kill process

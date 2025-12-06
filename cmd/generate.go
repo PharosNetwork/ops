@@ -576,22 +576,72 @@ func generatePrivateKey(keyType, keyDir, keyPasswd string) error {
 }
 
 // generateBLSKey generates a BLS key
-// Note: This is a simplified implementation. In Python, it uses pharos_cli which may not be available
+// This matches Python's implementation which uses pharos_cli
 func generateBLSKey(keyDir string) error {
 	// Create directory if it doesn't exist
 	if err := os.MkdirAll(keyDir, 0755); err != nil {
 		return fmt.Errorf("failed to create BLS key directory: %w", err)
 	}
 
-	// For now, create placeholder files
-	// In a real implementation, you would use pharos_cli or a proper BLS key generation library
-	utils.Warn("BLS key generation not implemented. Creating placeholder files.")
+	// Look for pharos_cli in build_root/bin
+	buildRoot := "../" // Default relative path, should be determined from context
+	pharosCliPath := filepath.Join(buildRoot, "bin", "pharos_cli")
+	evmonePath := filepath.Join(buildRoot, "bin", "libevmone.so")
 
+	// Check if pharos_cli exists
+	if _, err := os.Stat(pharosCliPath); err != nil {
+		utils.Warn("pharos_cli not found at %s, creating placeholder BLS keys", pharosCliPath)
+		return createPlaceholderBLSKeys(keyDir)
+	}
+
+	// Generate BLS keys using pharos_cli (matching Python)
+	// Command: LD_PRELOAD={evmone_so_path} {pharos_cli_path} crypto -t gen-key -a bls12381
+	cmd := exec.Command("sh", "-c", fmt.Sprintf("LD_PRELOAD=%s %s crypto -t gen-key -a bls12381", evmonePath, pharosCliPath))
+	output, err := cmd.Output()
+	if err != nil {
+		utils.Warn("Failed to generate BLS keys using pharos_cli: %v, creating placeholder keys", err)
+		return createPlaceholderBLSKeys(keyDir)
+	}
+
+	// Parse output - should contain PRIVKEY and PUBKEY lines
+	outputStr := string(output)
+	lines := strings.Split(outputStr, "\n")
+
+	var prikey, pubkey string
+	for _, line := range lines {
+		if strings.HasPrefix(line, "PRIVKEY:") {
+			prikey = strings.TrimSpace(strings.TrimPrefix(line, "PRIVKEY:"))
+		} else if strings.HasPrefix(line, "PUBKEY:") {
+			pubkey = strings.TrimSpace(strings.TrimPrefix(line, "PUBKEY:"))
+		}
+	}
+
+	if prikey == "" || pubkey == "" {
+		utils.Warn("Failed to parse BLS keys from output, creating placeholder keys")
+		return createPlaceholderBLSKeys(keyDir)
+	}
+
+	// Write keys to files
 	prikeyPath := filepath.Join(keyDir, "new.key")
 	pubkeyPath := filepath.Join(keyDir, "new.pub")
 
-	// Create placeholder keys (these would need to be replaced with actual BLS keys)
-	prikey := "4002" + strings.Repeat("00", 62) // 32 bytes of zeros after prefix
+	if err := os.WriteFile(prikeyPath, []byte(prikey), 0644); err != nil {
+		return fmt.Errorf("failed to write BLS private key: %w", err)
+	}
+	if err := os.WriteFile(pubkeyPath, []byte(pubkey), 0644); err != nil {
+		return fmt.Errorf("failed to write BLS public key: %w", err)
+	}
+
+	return nil
+}
+
+// createPlaceholderBLSKeys creates placeholder BLS keys when pharos_cli is not available
+func createPlaceholderBLSKeys(keyDir string) error {
+	prikeyPath := filepath.Join(keyDir, "new.key")
+	pubkeyPath := filepath.Join(keyDir, "new.pub")
+
+	// Create placeholder BLS keys
+	prikey := "4002" + strings.Repeat("00", 62)
 	pubkey := "4003" + strings.Repeat("00", 62)
 
 	if err := os.WriteFile(prikeyPath, []byte(prikey), 0644); err != nil {
@@ -601,6 +651,7 @@ func generateBLSKey(keyDir string) error {
 		return fmt.Errorf("failed to write BLS public key: %w", err)
 	}
 
+	utils.Warn("Created placeholder BLS keys. Replace them with proper keys for production use.")
 	return nil
 }
 
