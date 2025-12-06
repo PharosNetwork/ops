@@ -70,5 +70,13 @@ type MygridEnvConfig struct {
 }
 
 const (
-	ServiceLight = "light"
+	ServiceETCD       = "etcd"
+	ServiceStorage    = "storage"
+	ServiceTxPool     = "txpool"
+	ServiceController = "controller"
+	ServiceDog        = "dog"
+	ServicePortal     = "portal"
+	ServiceCompute    = "compute"
+	ServiceLight      = "light"
+	ServiceMygrid     = "mygrid_service"
 )

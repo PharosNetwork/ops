@@ -34,6 +34,12 @@ func New(domainFile string) (*Composer, error) {
 		return nil, fmt.Errorf("failed to parse domain file: %w", err)
 	}
 
+	// Convert build_root to absolute path if relative
+	if d.BuildRoot != "" && !filepath.IsAbs(d.BuildRoot) {
+		// build_root is relative to the domain file's directory
+		d.BuildRoot = filepath.Join(filepath.Dir(absPath), d.BuildRoot)
+	}
+
 	c := &Composer{
 		domain:     &d,
 		domainPath: filepath.Dir(absPath),
@@ -190,5 +196,22 @@ func (c *Composer) stopInstance(inst domain.Instance) error {
 
 
 func (c *Composer) getBinaryName(service string) string {
-	return "pharos"
+	// Binary name mapping matching Python's BINARY_MAP
+	binaryMap := map[string]string{
+		"etcd":       "etcd",           // SERVICE_ETCD -> ETCD_BIN
+		"storage":    "mygrid_service", // SERVICE_STORAGE -> STORAGE_BIN
+		"portal":     "pharos",         // SERVICE_PORTAL -> PHAROS_BIN
+		"dog":        "pharos",         // SERVICE_DOG -> PHAROS_BIN
+		"txpool":     "pharos",         // SERVICE_TXPOOL -> PHAROS_BIN
+		"controller": "pharos",         // SERVICE_CONTROLLER -> PHAROS_BIN
+		"compute":    "pharos",         // SERVICE_COMPUTE -> PHAROS_BIN
+		"light":      "pharos_light",   // SERVICE_LIGHT -> PHAROS_BIN_LIGHT
+	}
+
+	if binary, exists := binaryMap[service]; exists {
+		return binary
+	}
+
+	// Fallback to service name
+	return service
 }
