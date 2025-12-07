@@ -40,6 +40,11 @@ func New(domainFile string) (*Composer, error) {
 		d.BuildRoot = filepath.Join(filepath.Dir(absPath), d.BuildRoot)
 	}
 
+	// Debug output
+	utils.Debug("Domain file: %s", absPath)
+	utils.Debug("Domain directory: %s", filepath.Dir(absPath))
+	utils.Debug("BuildRoot: %s", d.BuildRoot)
+
 	c := &Composer{
 		domain:     &d,
 		domainPath: filepath.Dir(absPath),
@@ -120,6 +125,18 @@ func (c *Composer) getInstances(service string) map[string][]*domain.Instance {
 	return instances
 }
 
+// getEtcdEndpoints returns etcd endpoints in the format expected by CLI_JSON
+func (c *Composer) getEtcdEndpoints() []string {
+	var endpoints []string
+	for _, inst := range c.domain.Cluster {
+		if inst.Service == "etcd" {
+			endpoint := fmt.Sprintf("%s:2379", inst.IP)
+			endpoints = append(endpoints, endpoint)
+		}
+	}
+	return endpoints
+}
+
 func (c *Composer) statusInstance(inst *domain.Instance) error {
 	// Check if process is running
 	cmd := exec.Command("pgrep", "-f", inst.Service)
@@ -138,65 +155,6 @@ func (c *Composer) statusInstance(inst *domain.Instance) error {
 	return nil
 }
 
-func (c *Composer) startService(service string) error {
-	utils.Info("Starting service: %s", service)
-	
-	instances := c.getInstances(service)
-	for host, insts := range instances {
-		for _, inst := range insts {
-			if err := c.startInstance(inst); err != nil {
-				return fmt.Errorf("failed to start instance %s on %s: %w", inst.Name, host, err)
-			}
-		}
-	}
-	
-	return nil
-}
-
-func (c *Composer) stopService(service string) error {
-	utils.Info("Stopping service: %s", service)
-	
-	instances := c.getInstances(service)
-	for host, insts := range instances {
-		for _, inst := range insts {
-			if err := c.stopInstance(inst); err != nil {
-				utils.Error("Failed to stop instance %s on %s: %v", inst.Name, host, err)
-			}
-		}
-	}
-	
-	return nil
-}
-
-
-
-func (c *Composer) startInstance(inst *domain.Instance) error {
-	utils.Info("Starting instance: %s", inst.Name)
-	
-	workDir := filepath.Join(inst.Dir, "bin")
-	binary := c.getBinaryName(inst.Service)
-	
-	// Create start command
-	cmd := exec.Command(binary, "-s", inst.Service, "-d")
-	
-	cmd.Dir = workDir
-	
-	// Set environment variables
-	cmd.Env = os.Environ()
-	for k, v := range inst.Env {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
-	}
-	
-	return cmd.Start()
-}
-
-func (c *Composer) stopInstance(inst *domain.Instance) error {
-	utils.Info("Stopping instance: %s", inst.Name)
-	
-	// Find and kill process
-	cmd := exec.Command("pkill", "-f", inst.Service)
-	return cmd.Run()
-}
 
 
 

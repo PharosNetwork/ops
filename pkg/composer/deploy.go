@@ -11,7 +11,15 @@ import (
 
 	"pharos-ops/pkg/domain"
 	"pharos-ops/pkg/ssh"
+	"pharos-ops/pkg/template"
 	"pharos-ops/pkg/utils"
+)
+
+const (
+	MYGRID_CONF_JSON_FILENAME = "mygrid.conf.json"
+	MYGRID_ENV_JSON_FILENAME  = "mygrid.env.json"
+	LIGHT_DEPLOY_MODE         = "light"
+	ULTRA_DEPLOY_MODE         = "ultra"
 )
 
 // Deploy deploys the domain configuration to remote hosts
@@ -20,7 +28,7 @@ func (c *Composer) Deploy(service string) error {
 	utils.Info("Deploying %s, service: %s", c.domain.DomainLabel, service)
 
 	// Clean data and log first (matching Python)
-	if err := c.Clean(service, true); err != nil {
+	if err := c.clean(service, true); err != nil {
 		utils.Warn("Failed to clean before deploy: %v", err)
 	}
 
@@ -42,6 +50,9 @@ func (c *Composer) Deploy(service string) error {
 	// Deploy to each host
 	for host, insts := range hostInstances {
 		utils.Info("Deploying to host: %s", host)
+		if pwd, err := os.Getwd(); err == nil {
+			utils.Debug("Current working directory: %s", pwd)
+		}
 		if err := c.deployHost(host, insts, service, true, true); err != nil {
 			return fmt.Errorf("failed to deploy to host %s: %w", host, err)
 		}
@@ -252,13 +263,17 @@ func (c *Composer) deployLocalCLI() error {
 		utils.Warn("Failed to sync CLI binaries: %v", err)
 	}
 
-	// Sync genesis.conf if exists
-	genesisSrc := filepath.Join(c.domain.BuildRoot, "conf", "genesis.conf")
+	// Sync genesis.conf
+	// Python: local.sync(self._domain.genesis_conf, join(cli_conf_dir, 'genesis.conf'))
+	// genesis_conf is relative to domain.json path
+	genesisSrc := filepath.Join(c.domainPath, c.domain.GenesisConf)
 	genesisDst := filepath.Join(filepath.Join(localClientDir, "conf"), "genesis.conf")
 	if _, err := os.Stat(genesisSrc); err == nil {
 		if err := copyFile(genesisSrc, genesisDst); err != nil {
 			utils.Warn("Failed to copy genesis.conf: %v", err)
 		}
+	} else {
+		utils.Warn("Genesis conf file not found: %v", err)
 	}
 
 	// Sync node_config.json
@@ -284,12 +299,51 @@ func (c *Composer) deployLocalCLI() error {
 		}
 	}
 
-	// Generate cli.conf
+	// Generate cli.conf (matching Python's implementation)
+	// Get metasvc_path similar to Python logic
+	// Python: metasvc_path = f"{self._mygrid_env_json['mygrid_env']['meta_store_disk']}/{self._mygrid_env_json['mygrid_env']['project_data_path']}"
+	metasvcPath := c.domain.DeployDir + "/data" // Default based on deploy_dir
+
+	// Try to read from mygrid.env.json if it exists
+	mygridEnvPath := filepath.Join(c.domainPath, "../conf/mygrid.light.env.json")
+	if _, err := os.Stat(mygridEnvPath); err == nil {
+		if data, err := os.ReadFile(mygridEnvPath); err == nil {
+			var mygridEnv map[string]interface{}
+			if err := json.Unmarshal(data, &mygridEnv); err == nil {
+				if env, ok := mygridEnv["mygrid_env"].(map[string]interface{}); ok {
+					if metaStoreDisk, ok := env["meta_store_disk"].(string); ok {
+						if projectDataPath, ok := env["project_data_path"].(string); ok {
+							metasvcPath = filepath.Join(metaStoreDisk, projectDataPath)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Note: Python version uses absolute path in meta_service.conf
+	// We use absolute path to match Python behavior
+
 	cliConf := map[string]interface{}{
 		"chain_id":   c.domain.ChainID,
 		"domain_id":  c.domain.DomainLabel,
-		"data_path":  "/tmp/pharos_data", // Default value, should be configured
+		"etcd": map[string]interface{}{
+			"enable": 0,
+			"timeout": 5000,
+			"retry_sleep_time": 1,
+			"endpoints": []string{},
+		},
+		"data_path":  metasvcPath, // Use absolute path like Python
 		"mygrid_env_path": "../conf/mygrid.env.json",
+		"mygrid_conf_path": "../conf/mygrid.conf.json",
+		"mygrid_client_id": "light",
+		"service_name": "light",
+		"mygrid_client_deploy_mode": func() string {
+			if c.isLight {
+				return "light"
+			}
+			return "ultra"
+		}(),
 	}
 
 	cliConfFile := filepath.Join(cliBinDir, "cli.conf")
@@ -298,17 +352,23 @@ func (c *Composer) deployLocalCLI() error {
 	}
 
 	// Generate mygrid_genesis.conf (matching Python's MYGRID_GENESIS_CONFIG_FILENAME)
+	// Note: Python sets mygrid_client_deploy_mode first, then mygrid_client_id
 	mygridGenesisConf := map[string]interface{}{
 		"mygrid": map[string]interface{}{
-			"mygrid_client_id":       "0",
-			"mygrid_conf_path":       "../conf/mygrid.conf.json",
-			"mygrid_env_path":        "../conf/mygrid.env.json",
 			"mygrid_client_deploy_mode": func() string {
 				if c.isLight {
 					return "light"
 				}
 				return "ultra"
 			}(),
+			"mygrid_client_id": func() string {
+				if c.isLight {
+					return "light"
+				}
+				return "0"
+			}(),
+			"mygrid_conf_path": "../conf/mygrid.conf.json",
+			"mygrid_env_path":  "../conf/mygrid.env.json",
 		},
 	}
 
@@ -318,24 +378,17 @@ func (c *Composer) deployLocalCLI() error {
 	}
 
 	// Generate meta_service.conf (matching Python's META_SERVICE_CONFIG_FILENAME)
+	// Python uses relative path "../data" in META_SERVICE_JSON constant
 	metaServiceConf := map[string]interface{}{
 		"meta_service": map[string]interface{}{
 			"myid": 0,
 			"etcd": map[string]interface{}{
 				"enable": 0,
+				"timeout": 5000,
+				"retry_sleep_time": 1,
+				"endpoints": []string{},
 			},
-			"storage": map[string]interface{}{
-				"deploy_mode": func() string {
-					if c.isLight {
-						return "light"
-					}
-					return "ultra"
-				}(),
-				"role":         "client",
-				"data_path":    "/tmp/pharos_data",
-				"conf_path":    "../conf/mygrid.conf.json",
-				"env_path":     "../conf/mygrid.env.json",
-			},
+			"data_path": "../data", // Python uses relative path
 		},
 	}
 
@@ -365,39 +418,105 @@ func (c *Composer) deployLocalCLI() error {
 		}
 	}
 
-	// Generate mygrid.conf.json (simplified version)
-	mygridConf := map[string]interface{}{
-		"mygrid": map[string]interface{}{
-			"env": map[string]interface{}{
-				"enable_adaptive": false,
-				"meta_store_disk": "/data/pharos-node/meta_store",
-				"project_data_path": "data",
+	// Generate mygrid.conf.json (matching Python)
+	// Python loads this from '../conf/mygrid.conf.json' relative to domain file
+	mygridConfFile := filepath.Join(c.domainPath, "../conf/mygrid.conf.json")
+	data, err := os.ReadFile(mygridConfFile)
+	if err != nil {
+		utils.Warn("Failed to read mygrid.conf.json: %v", err)
+		// Create minimal default as last resort
+		mygridConf := map[string]interface{}{
+			"mygrid": map[string]interface{}{
+				"env": map[string]interface{}{
+					"enable_adaptive": false,
+					"meta_store_disk": c.domain.DeployDir + "/meta_store",
+					"project_data_path": "data",
+				},
 			},
-		},
+		}
+		if data, err = json.MarshalIndent(mygridConf, "", "  "); err != nil {
+			return fmt.Errorf("failed to marshal default mygrid.conf.json: %w", err)
+		}
 	}
 
-	mygridConfFile := filepath.Join(filepath.Join(localClientDir, "conf"), "mygrid.conf.json")
-	if err := writeJSON(mygridConfFile, mygridConf); err != nil {
+	localMygridConfFile := filepath.Join(filepath.Join(localClientDir, "conf"), "mygrid.conf.json")
+	if err := os.WriteFile(localMygridConfFile, data, 0644); err != nil {
 		utils.Warn("Failed to write mygrid.conf.json: %v", err)
 	}
 
-	// Generate mygrid.env.json (simplified version)
-	mygridEnv := map[string]interface{}{
-		"mygrid_env": map[string]interface{}{
-			"enable_adaptive": false,
-			"meta_store_disk": "/data/pharos-node/meta_store",
-			"project_data_path": "data",
-			"mode": func() string {
-				if c.isLight {
-					return "light"
-				}
-				return "ultra"
-				}(),
-		},
+	// Generate mygrid.env.json (matching Python's implementation)
+	// Read template from domain configuration
+	envFilepath := c.domain.Mygrid.Env.Filepath
+	if envFilepath == "" {
+		envFilepath = "../conf/mygrid.light.env.json" // Default for light
+		if !c.isLight {
+			envFilepath = "../conf/mygrid.ultra.env.json"
+		}
 	}
 
-	mygridEnvFile := filepath.Join(filepath.Join(localClientDir, "conf"), "mygrid.env.json")
-	if err := writeJSON(mygridEnvFile, mygridEnv); err != nil {
+	// Try to read from the configured filepath
+	// filepath is relative to domain.json file, not BuildRoot (matching Python)
+	mygridEnvFile := filepath.Join(c.domainPath, envFilepath)
+	var envData []byte
+	envData, err = os.ReadFile(mygridEnvFile)
+	if err != nil {
+		// Create minimal default
+		utils.Warn("Failed to read mygrid.env.json template, using minimal config: %v", err)
+		mygridEnv := map[string]interface{}{
+			"mygrid_env": map[string]interface{}{
+				"enable_adaptive": false,
+				"meta_store_disk": c.domain.DeployDir + "/meta_store",
+				"project_data_path": "data",
+				"mode": func() string {
+					if c.isLight {
+						return "light"
+					}
+					return "ultra"
+				}(),
+			},
+		}
+		if envData, err = json.MarshalIndent(mygridEnv, "", "  "); err != nil {
+			return fmt.Errorf("failed to marshal default mygrid.env.json: %w", err)
+		}
+	} else {
+		// Parse and potentially modify based on enable_adaptive
+		var mygridEnv map[string]interface{}
+		if err := json.Unmarshal(envData, &mygridEnv); err != nil {
+			return fmt.Errorf("failed to parse mygrid.env.json template: %w", err)
+		}
+
+		// Apply adaptive logic if enabled
+		if c.domain.Mygrid.Env.EnableAdaptive {
+			if env, ok := mygridEnv["mygrid_env"].(map[string]interface{}); ok {
+				deployTopDir := filepath.Dir(c.domain.DeployDir) // Should calculate from config
+				env["meta_store_disk"] = deployTopDir
+				env["flat_kvdb_disk"] = deployTopDir
+				env["project_data_path"] = "data" // Should use meta_svc_dir
+
+				// Add placements based on light/ultra
+				if c.isLight {
+					env["placements"] = []map[string]interface{}{
+						{
+							"default": deployTopDir,
+							"tier_0": deployTopDir,
+						},
+					}
+				}
+
+				// Set admin ports
+				domainIndex := 0 // Should get from domain config
+				env["master_lite_admin_port"] = 23100 + (domainIndex * 1000)
+				env["server_lite_admin_port"] = 23101 + (domainIndex * 1000)
+			}
+		}
+
+		if envData, err = json.MarshalIndent(mygridEnv, "", "  "); err != nil {
+			return fmt.Errorf("failed to marshal modified mygrid.env.json: %w", err)
+		}
+	}
+
+	localMygridEnvFile := filepath.Join(filepath.Join(localClientDir, "conf"), "mygrid.env.json")
+	if err := os.WriteFile(localMygridEnvFile, envData, 0644); err != nil {
 		utils.Warn("Failed to write mygrid.env.json: %v", err)
 	}
 
@@ -614,34 +733,114 @@ func (c *Composer) deployConfigurationRemote(sshClient *ssh.Client, instances []
 
 		// Generate launch.conf (except for etcd and storage)
 		if inst.Service != "etcd" && inst.Service != "storage" {
-			launchConfData := map[string]interface{}{
-				"log": map[string]interface{}{},
-				"parameters": map[string]string{
-					"/SetEnv/LISTEN_URLS": inst.Env["LISTEN_URLS"],
-				},
-				"init_config": map[string]interface{}{
-					"mygrid_client_id":         inst.Name,
-					"service_name":             inst.Service,
-					"mygrid_client_deploy_mode": func() string {
-					if inst.Service == "light" {
-						return "light"
-					}
-					return "ultra"
-				}(),
-				},
+			utils.Info("Generating launch.conf for service: %s, instance: %s", inst.Service, inst.Name)
+			// Start with basic structure
+			parameters := map[string]string{}
+
+			// Add all instance environment variables
+			for key, value := range inst.Env {
+				parameters["/SetEnv/"+key] = value
 			}
 
-			// Add all environment variables
-			for key, value := range inst.Env {
-				launchConfData["parameters"].(map[string]string)["/SetEnv/"+key] = value
+			// Add standard environment variables that Python adds
+			parameters["/SetEnv/SERVICE"] = inst.Service
+			parameters["/SetEnv/CHAIN_ID"] = c.domain.ChainID
+			parameters["/SetEnv/DOMAIN_LABEL"] = c.domain.DomainLabel
+			parameters["/SetEnv/PORTAL_UUID"] = "100" // Default value
+
+			// For light service, add specific variables
+			if inst.Service == "light" {
+				parameters["/SetEnv/LIGHT_RPC_LISTEN_URL"] = "0.0.0.0:20000"
+				parameters["/SetEnv/LIGHT_RPC_ADVERTISE_URL"] = "47.236.202.124:20000"
 			}
+
+			// Load CLI_JSON template like Python does
+			var cliConf map[string]interface{}
+			if err := json.Unmarshal([]byte(template.CLI_JSON), &cliConf); err != nil {
+				return fmt.Errorf("failed to parse CLI_JSON template: %w", err)
+			}
+
+			// Debug: Check what we loaded
+			utils.Info("Loaded CLI_JSON template with fields: chain_id=%q, domain_id=%q", cliConf["chain_id"], cliConf["domain_id"])
+
+			// Modify cli_conf exactly like Python
+			cliConf["chain_id"] = c.domain.ChainID
+			cliConf["domain_id"] = c.domain.DomainLabel
+			utils.Info("After setting chain_id=%q and domain_id=%q", cliConf["chain_id"], cliConf["domain_id"])
+
+			// Configure etcd - match Python's META_SERVICE_JSON exactly
+			etcdConf := map[string]interface{}{
+				"enable":            0,
+				"timeout":           5000,
+				"retry_sleep_time":  1,
+				"endpoints":         []string{},
+			}
+
+			if !c.isLight {
+				// Check if etcd0 has ETCD_ENABLE_V2=true
+				if etcdInst, exists := c.domain.Cluster["etcd0"]; exists {
+					if etcdInst.Env["ETCD_ENABLE_V2"] == "true" {
+						etcdConf["enable"] = 2
+					} else {
+						etcdConf["enable"] = 1
+					}
+				}
+				etcdConf["endpoints"] = c.getEtcdEndpoints()
+			}
+			cliConf["etcd"] = etcdConf
+
+			// Set data_path - Python uses absolute path for cli.conf
+			// Use the deploy_dir from domain.json
+			var metasvcPath string
+			if inst.Service == "light" {
+				metasvcPath = fmt.Sprintf("%s/%s/data", c.domain.DeployDir, inst.Name)
+			} else {
+				metasvcPath = fmt.Sprintf("%s/%s/data", c.domain.DeployDir, inst.Name)
+			}
+			cliConf["data_path"] = metasvcPath
+
+			// Set mygrid paths
+			cliConf["mygrid_env_path"] = "../conf/" + MYGRID_ENV_JSON_FILENAME
+			cliConf["mygrid_conf_path"] = "../conf/" + MYGRID_CONF_JSON_FILENAME
+
+			// Set instance-specific fields like Python's deploy_host_conf
+			if inst.Service == "light" {
+				cliConf["mygrid_client_id"] = "light"
+			} else {
+				cliConf["mygrid_client_id"] = inst.Name
+			}
+			cliConf["service_name"] = inst.Service
+
+			if inst.Service == "light" {
+				cliConf["mygrid_client_deploy_mode"] = LIGHT_DEPLOY_MODE
+			} else {
+				cliConf["mygrid_client_deploy_mode"] = ULTRA_DEPLOY_MODE
+			}
+
+			// Debug: print cliConf before creating launchConfData
+			utils.Info("cliConf before launchConfData: chain_id=%v, domain_id=%v, data_path=%v",
+				cliConf["chain_id"], cliConf["domain_id"], cliConf["data_path"])
+
+			launchConfData := map[string]interface{}{
+				"log":         map[string]interface{}{},
+				"parameters":  parameters,
+				"init_config": cliConf,
+			}
+
+			utils.Info("Creating launch.conf for instance %s", inst.Name)
 
 			// Create temporary file for launch.conf
 			tmpFile := filepath.Join(os.TempDir(), fmt.Sprintf("launch_conf_%s.json", inst.Name))
 			if err := writeJSON(tmpFile, launchConfData); err != nil {
 				return fmt.Errorf("failed to create temporary launch.conf: %w", err)
 			}
-			defer os.Remove(tmpFile)
+			utils.Info("Wrote launch.conf to temp file: %s", tmpFile)
+
+			// Also write to a fixed location for debugging
+			debugFile := "/tmp/launch_conf_debug.json"
+			if err := writeJSON(debugFile, launchConfData); err != nil {
+				utils.Warn("Failed to write debug file: %v", err)
+			}
 
 			// Upload launch.conf
 			remoteLaunchConf := filepath.Join(instDir, "conf", "launch.conf")
@@ -680,165 +879,20 @@ func (c *Composer) deployConfigurationRemote(sshClient *ssh.Client, instances []
 func (c *Composer) handleNonAdaptiveModeRemote(sshClient *ssh.Client) error {
 	utils.Info("=== Handling non-adaptive mode ===")
 
-	// TODO: Read from mygrid.env.json
-	isAdaptive := false
-	utils.Info("Is adaptive mode: %v", isAdaptive)
+	// In non-adaptive mode, meta_service.conf uses relative path "../data"
+	// Since meta_tool runs from {deploy_dir}/client/bin
+	// It expects {deploy_dir}/client/data directory
+	// For light mode, create the data directory that meta_tool expects
 
-	if isAdaptive {
-		utils.Info("Skipping non-adaptive mode setup (adaptive mode enabled)")
-		return nil
+	clientDataDir := filepath.Join(c.domain.DeployDir, "client", "data")
+	utils.Info("Creating client data directory: %s", clientDataDir)
+
+	if err := sshClient.MkdirAll(clientDataDir, 0755); err != nil {
+		utils.Error("Failed to create client data directory: %v", err)
+		return fmt.Errorf("failed to create client data directory: %w", err)
 	}
 
-	// Create meta storage directories on remote host
-	metaStoreDisk := "/data/pharos-node/meta_store"
-	projectDataPath := "data"
-
-	utils.Info("Creating meta storage directories...")
-	// Create directories
-	if err := sshClient.MkdirAll(metaStoreDisk, 0755); err != nil {
-		utils.Error("Failed to create meta store directory: %v", err)
-		return fmt.Errorf("failed to create meta store directory: %w", err)
-	}
-
-	fullPath := filepath.Join(metaStoreDisk, projectDataPath)
-	if err := sshClient.MkdirAll(fullPath, 0755); err != nil {
-		utils.Error("Failed to create project data directory: %v", err)
-		return fmt.Errorf("failed to create project data directory: %w", err)
-	}
-
-	utils.Info("✓ Created non-adaptive meta storage directories on remote host: %s", fullPath)
-	return nil
-}
-
-// Clean cleans up data and log directories
-func (c *Composer) Clean(service string, cleanMeta bool) error {
-	utils.Info("Cleaning %s, service: %s, clean_meta: %v", c.domain.DomainLabel, service, cleanMeta)
-
-	// Light mode: clean only light instance
-	if c.isLight {
-		if lightInst, exists := c.domain.Cluster[domain.ServiceLight]; exists {
-			return c.cleanInstance("light", cleanMeta, lightInst)
-		}
-		return nil
-	}
-
-	// Ultra mode: clean services in reverse order
-	services := []string{
-		domain.ServicePortal,
-		domain.ServiceDog,
-		domain.ServiceController,
-		domain.ServiceCompute,
-		domain.ServiceTxPool,
-		domain.ServiceStorage,
-	}
-
-	// Add etcd only if clean_meta is true
-	if cleanMeta {
-		services = append(services, domain.ServiceETCD)
-	}
-
-	if service != "" {
-		// Clean specific service
-		return c.cleanService(service, cleanMeta)
-	}
-
-	// Clean all services
-	for _, svc := range services {
-		if err := c.cleanService(svc, cleanMeta); err != nil {
-			utils.Warn("Failed to clean service %s: %v", svc, err)
-		}
-	}
-
-	return nil
-}
-
-// cleanService cleans a specific service
-func (c *Composer) cleanService(service string, cleanMeta bool) error {
-	// Find instances for this service
-	for name, inst := range c.domain.Cluster {
-		if inst.Service == service {
-			if err := c.cleanInstance(name, cleanMeta, inst); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// cleanInstance cleans a specific instance
-func (c *Composer) cleanInstance(instanceName string, cleanMeta bool, inst *domain.Instance) error {
-	utils.Info("Cleaning instance %s on %s", instanceName, inst.IP)
-
-	// Determine instance directory
-	instDir := inst.Dir
-	if instDir == "" {
-		deployDir := c.domain.DeployDir
-		if deployDir == "" {
-			deployDir = filepath.Join(c.domain.BuildRoot, "domain", c.domain.DomainLabel)
-		}
-		instDir = filepath.Join(deployDir, inst.Name)
-	}
-
-	// Use SSH for all instances (including localhost)
-	return c.cleanInstanceRemote(inst.IP, instanceName, cleanMeta, instDir)
-}
-
-// cleanInstanceRemote cleans up a remote instance
-func (c *Composer) cleanInstanceRemote(host, instanceName string, cleanMeta bool, instDir string) error {
-	utils.Info("Cleaning remote instance %s on %s", instanceName, host)
-
-	// Create SSH client
-	user := c.domain.RunUser
-	if host == "127.0.0.1" || host == "localhost" {
-		user = "" // Let SSH use current user
-	}
-	sshClient, err := ssh.NewClient(host, user)
-	if err != nil {
-		return fmt.Errorf("failed to create SSH client: %w", err)
-	}
-	defer sshClient.Close()
-
-	// Connect
-	if err := sshClient.Connect(); err != nil {
-		return fmt.Errorf("failed to connect: %w", err)
-	}
-
-	// Clean data directory if clean_meta
-	if cleanMeta {
-		dataDir := filepath.Join(instDir, "data")
-		if err := sshClient.RemoveAll(dataDir); err != nil {
-			utils.Warn("Failed to remove remote data directory %s: %v", dataDir, err)
-		}
-	}
-
-	// Clean log directory
-	logDir := filepath.Join(instDir, "log")
-	if err := sshClient.RemoveAll(logDir); err != nil {
-		utils.Warn("Failed to remove remote log directory %s: %v", logDir, err)
-	}
-
-	// Clean specific files
-	filesToClean := []string{
-		filepath.Join(instDir, "bin", "epoch.conf"),
-		filepath.Join(instDir, "bin", "*.log"),
-		filepath.Join(instDir, "bin", "*.stdout"),
-	}
-
-	for _, pattern := range filesToClean {
-		if strings.Contains(pattern, "*") {
-			// Use rm with glob pattern
-			cmd := fmt.Sprintf("rm -f %s", pattern)
-			if _, err := sshClient.RunCommand(cmd); err != nil {
-				utils.Warn("Failed to clean files with pattern %s: %v", pattern, err)
-			}
-		} else {
-			// Single file
-			if err := sshClient.Remove(pattern); err != nil && !strings.Contains(err.Error(), "No such file") {
-				utils.Warn("Failed to remove file %s: %v", pattern, err)
-			}
-		}
-	}
-
+	utils.Info("✓ Created client data directory: %s", clientDataDir)
 	return nil
 }
 
@@ -847,14 +901,16 @@ func (c *Composer) cleanInstanceRemote(host, instanceName string, cleanMeta bool
 func (c *Composer) deployCubenetConf(sshClient *ssh.Client, inst *domain.Instance) error {
 	instDir := inst.Dir
 	if instDir == "" {
-		instDir = "/data/pharos-node/domain/" + inst.Name
+		instDir = filepath.Join(c.domain.DeployDir, inst.Name)
 	}
 
-	// Read dog.conf
+	// Read dog.conf (matching Python's behavior)
+	// Python uses self._build_conf('dog.conf') which is relative to BuildRoot
 	dogConfFile := filepath.Join(c.domain.BuildRoot, "conf", "dog.conf")
+	utils.Debug("Looking for dog.conf at: %s", dogConfFile)
 	data, err := os.ReadFile(dogConfFile)
 	if err != nil {
-		return fmt.Errorf("failed to read dog.conf: %w", err)
+		return fmt.Errorf("failed to read dog.conf from %s: %w", dogConfFile, err)
 	}
 
 	var dogConf map[string]interface{}
@@ -973,27 +1029,15 @@ func (c *Composer) deployCubenetConf(sshClient *ssh.Client, inst *domain.Instanc
 func (c *Composer) deployMygridConfigs(sshClient *ssh.Client, inst *domain.Instance) error {
 	instDir := inst.Dir
 	if instDir == "" {
-		instDir = "/data/pharos-node/domain/" + inst.Name
+		instDir = filepath.Join(c.domain.DeployDir, inst.Name)
 	}
 
-	// Read mygrid.conf.json from build_root/conf (matching Python)
-	mygridConfFile := filepath.Join(c.domain.BuildRoot, "conf", "mygrid.conf.json")
+	// Read mygrid.conf.json (matching Python)
+	// Python loads this from '../conf/mygrid.conf.json' relative to domain file
+	mygridConfFile := filepath.Join(c.domainPath, "../conf/mygrid.conf.json")
 	data, err := os.ReadFile(mygridConfFile)
 	if err != nil {
-		// Create default if file doesn't exist
-		utils.Warn("mygrid.conf.json not found at %s, creating default", mygridConfFile)
-		mygridConf := map[string]interface{}{
-			"mygrid": map[string]interface{}{
-				"env": map[string]interface{}{
-					"enable_adaptive": false,
-					"meta_store_disk": "/data/pharos-node/meta_store",
-					"project_data_path": "data",
-				},
-			},
-		}
-		if data, err = json.Marshal(mygridConf); err != nil {
-			return fmt.Errorf("failed to marshal default mygrid.conf.json: %w", err)
-		}
+		return fmt.Errorf("failed to read mygrid.conf.json: %w", err)
 	}
 
 	// Write to temp file and upload
@@ -1008,24 +1052,81 @@ func (c *Composer) deployMygridConfigs(sshClient *ssh.Client, inst *domain.Insta
 		return fmt.Errorf("failed to upload mygrid.conf.json: %w", err)
 	}
 
-	// Read mygrid.env.json (this is generated by Python, not from file)
-	// This matches Python's _mygrid_env_json
-	mygridEnv := map[string]interface{}{
-		"mygrid_env": map[string]interface{}{
-			"enable_adaptive": false,
-			"meta_store_disk": "/data/pharos-node/meta_store",
-			"project_data_path": "data",
-			"mode": func() string {
+	// Read and configure mygrid.env.json (matching Python's implementation)
+	// Python loads this from template and modifies based on enable_adaptive
+	envFilepath := c.domain.Mygrid.Env.Filepath
+	if envFilepath == "" {
+		envFilepath = "../conf/mygrid.light.env.json"
+		if inst.Service != "light" {
+			envFilepath = "../conf/mygrid.ultra.env.json"
+		}
+	}
+
+	// Try to read the template
+	// filepath is relative to domain.json file, not BuildRoot (matching Python)
+	mygridEnvFile := filepath.Join(c.domainPath, envFilepath)
+	var envData2 []byte
+	envData2, err = os.ReadFile(mygridEnvFile)
+	if err != nil {
+		// Create minimal default
+		utils.Warn("Failed to read mygrid.env.json template, using minimal config: %v", err)
+		mygridEnv := map[string]interface{}{
+			"mygrid_env": map[string]interface{}{
+				"enable_adaptive": false,
+				"meta_store_disk": c.domain.DeployDir + "/meta_store",
+				"project_data_path": "data",
+				"mode": func() string {
+					if inst.Service == "light" {
+						return "light"
+					}
+					return "ultra"
+				}(),
+			},
+		}
+		if envData2, err = json.MarshalIndent(mygridEnv, "", "  "); err != nil {
+			return fmt.Errorf("failed to marshal default mygrid.env.json: %w", err)
+		}
+	} else {
+		// Parse and modify based on enable_adaptive
+		var mygridEnv map[string]interface{}
+		if err := json.Unmarshal(envData2, &mygridEnv); err != nil {
+			return fmt.Errorf("failed to parse mygrid.env.json template: %w", err)
+		}
+
+		// Apply adaptive logic if enabled
+		if c.domain.Mygrid.Env.EnableAdaptive {
+			if env, ok := mygridEnv["mygrid_env"].(map[string]interface{}); ok {
+				deployTopDir := filepath.Dir(c.domain.DeployDir) // Should calculate from config
+				metaSvcDir := "data" // Should calculate meta_svc_dir
+
+				env["meta_store_disk"] = deployTopDir
+				env["flat_kvdb_disk"] = deployTopDir
+				env["project_data_path"] = metaSvcDir
+
+				// Add placements for light mode
 				if inst.Service == "light" {
-					return "light"
+					env["placements"] = []map[string]interface{}{
+						{
+							"default": deployTopDir,
+							"tier_0": deployTopDir,
+						},
+					}
 				}
-				return "ultra"
-			}(),
-		},
+
+				// Set admin ports
+				domainIndex := 0 // Should get from domain config
+				env["master_lite_admin_port"] = 23100 + (domainIndex * 1000)
+				env["server_lite_admin_port"] = 23101 + (domainIndex * 1000)
+			}
+		}
+
+		if envData2, err = json.MarshalIndent(mygridEnv, "", "  "); err != nil {
+			return fmt.Errorf("failed to marshal modified mygrid.env.json: %w", err)
+		}
 	}
 
 	tmpEnvFile := filepath.Join(os.TempDir(), fmt.Sprintf("mygrid_env_%s.json", inst.Name))
-	if err := writeJSON(tmpEnvFile, mygridEnv); err != nil {
+	if err := os.WriteFile(tmpEnvFile, envData2, 0644); err != nil {
 		return fmt.Errorf("failed to write mygrid.env.json: %w", err)
 	}
 	defer os.Remove(tmpEnvFile)
@@ -1043,21 +1144,24 @@ func (c *Composer) deployMygridConfigs(sshClient *ssh.Client, inst *domain.Insta
 func (c *Composer) deployMonitorConf(sshClient *ssh.Client, inst *domain.Instance) error {
 	instDir := inst.Dir
 	if instDir == "" {
-		instDir = "/data/pharos-node/domain/" + inst.Name
+		instDir = filepath.Join(c.domain.DeployDir, inst.Name)
 	}
 
-	// Read monitor.conf.json from build_root/conf (matching Python)
-	monitorConfFile := filepath.Join(c.domain.BuildRoot, "conf", "monitor.conf.json")
+	// Read monitor.conf.json (matching Python)
+	// Python loads this from '../conf/monitor.conf.json' relative to domain file
+	monitorConfFile := filepath.Join(c.domainPath, "../conf/monitor.conf.json")
 	data, err := os.ReadFile(monitorConfFile)
 	if err != nil {
 		// Create default if file doesn't exist
-		utils.Warn("monitor.conf.json not found at %s, creating default", monitorConfFile)
+		utils.Warn("monitor.conf.json not found, creating default")
 		monitorConf := map[string]interface{}{
-			"monitor": map[string]interface{}{
-				"enabled": false, // Default disabled
-			},
+			"enable_pamir_cetina": true,
+			"pamir_cetina_push_address": "k8s-promethe-promethe-baabd0c689-34ab91e598e56441.elb.ap-southeast-1.amazonaws.com",
+			"pamir_cetina_push_port": 9091,
+			"pamir_cetina_push_interval": 5,
+			"pamir_cetina_job_name": "pharos_testnet",
 		}
-		if data, err = json.Marshal(monitorConf); err != nil {
+		if data, err = json.MarshalIndent(monitorConf, "", "  "); err != nil {
 			return fmt.Errorf("failed to marshal default monitor.conf.json: %w", err)
 		}
 	}
