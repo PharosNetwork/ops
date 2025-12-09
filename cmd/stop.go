@@ -8,24 +8,39 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var (
+	stopService string
+)
+
 var stopCmd = &cobra.Command{
-	Use:   "stop <domain.json>",
+	Use:   "stop [domain_files...]",
 	Short: "Stop pharos node",
 	Long:  "Stop pharos node from domain configuration",
-	Args:  cobra.ExactArgs(1),
+	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		domainFile := args[0]
-		utils.Info("Stopping node: %s", domainFile)
-		
-		c, err := composer.New(domainFile)
-		if err != nil {
-			return fmt.Errorf("failed to load domain file: %w", err)
+		for _, domainFile := range args {
+			fmt.Printf("%s\n", domainFile)
+
+			c, err := composer.New(domainFile)
+			if err != nil {
+				utils.Error("Failed to load domain file %s: %v", domainFile, err)
+				continue
+			}
+
+			if err := c.Stop(stopService); err != nil {
+				utils.Error("Failed to stop domain %s: %v", domainFile, err)
+				continue
+			}
 		}
-		
-		return c.Stop("")
+
+		return nil
 	},
 }
 
 func init() {
 	rootCmd.AddCommand(stopCmd)
+
+	// Add flags matching Python version
+	stopCmd.Flags().StringVarP(&stopService, "service", "s", "",
+		"service to stop [etcd|storage|portal|dog|txpool|controller|compute]")
 }

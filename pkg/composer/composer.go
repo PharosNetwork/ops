@@ -4,18 +4,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"pharos-ops/pkg/domain"
+	"pharos-ops/pkg/ssh"
 	"pharos-ops/pkg/utils"
 )
 
 type Composer struct {
-	domain     *domain.Domain
-	domainPath string
-	isLight    bool
+	domain           *domain.Domain
+	domainPath       string
+	isLight          bool
+	extraStorageArgs string
+	enableDocker     bool
+	chainProtocol    string
 }
 
 func New(domainFile string) (*Composer, error) {
@@ -73,38 +76,139 @@ func (c *Composer) Domain() *domain.Domain {
 }
 
 func (c *Composer) Status(service string) error {
-	utils.Info("Checking status for domain: %s", c.domain.DomainLabel)
-	
-	instances := c.getInstances(service)
-	for host, insts := range instances {
-		utils.Info("Host: %s", host)
-		for _, inst := range insts {
-			if err := c.statusInstance(inst); err != nil {
-				utils.Error("Failed to check status for %s: %v", inst.Name, err)
-			}
-		}
+	// Print header matching Python version
+	if service != "" {
+		utils.Info("=========== %s %s==========", c.domain.DomainLabel, service)
+	} else {
+		utils.Info("=========== %s===========", c.domain.DomainLabel)
 	}
+
+	// Group instances by host
+	hosts := c.getInstances(service)
+
+	// Check each host
+	for host, instances := range hosts {
+		user := c.domain.RunUser
+		if host == "127.0.0.1" || host == "localhost" {
+			user = ""
+		}
+
+		sshClient, err := ssh.NewClient(host, user)
+		if err != nil {
+			utils.Error("Failed to create SSH client for %s: %v", host, err)
+			continue
+		}
+
+		if err := sshClient.Connect(); err != nil {
+			utils.Error("Failed to connect to %s: %v", host, err)
+			sshClient.Close()
+			continue
+		}
+
+		// Check status on this host
+		if err := c.statusHost(sshClient, service, instances); err != nil {
+			utils.Error("Failed to check status on %s: %v", host, err)
+		}
+
+		sshClient.Close()
+	}
+
 	return nil
 }
 
-func (c *Composer) Start(service string) error {
-	utils.Info("Starting light node: %s", c.domain.DomainLabel)
-	
-	if service != "" && service != domain.ServiceLight {
-		return fmt.Errorf("only light service is supported")
+func (c *Composer) Start(service string, extraStorageArgs string) error {
+	utils.Info("Starting %s, service: %s", c.domain.DomainLabel, service)
+
+	// Save extra storage args for performance testing scenarios
+	c.extraStorageArgs = extraStorageArgs
+
+	// Check Docker mode (if implemented)
+	if c.enableDocker && service == "" {
+		// TODO: Implement Docker mode
+		// c.startService("")
+		// c.status("")
+		return fmt.Errorf("docker mode not yet implemented")
 	}
-	
-	return c.startService(domain.ServiceLight)
+
+	if c.isLight {
+		// Light mode: only support light service
+		if service != "" && service != domain.ServiceLight {
+			utils.Error("light mode only has light instance")
+			return nil
+		}
+		if err := c.startService(domain.ServiceLight); err != nil {
+			return err
+		}
+	} else if service == "" {
+		// Ultra mode: start all services in order
+		services := []string{
+			domain.ServiceETCD,
+			domain.ServiceStorage,
+			domain.ServiceTxPool,
+			domain.ServiceCompute,
+			domain.ServiceController,
+			domain.ServiceDog,
+			domain.ServicePortal,
+		}
+		for _, svc := range services {
+			if err := c.startService(svc); err != nil {
+				return err
+			}
+		}
+	} else {
+		// Start specified service
+		if err := c.startService(service); err != nil {
+			return err
+		}
+	}
+
+	// Show status after starting
+	return c.Status(service)
 }
 
 func (c *Composer) Stop(service string) error {
-	utils.Info("Stopping light node: %s", c.domain.DomainLabel)
-	
-	if service != "" && service != domain.ServiceLight {
-		return fmt.Errorf("only light service is supported")
+	utils.Info("Stopping %s, service: %s", c.domain.DomainLabel, service)
+
+	// Docker mode handling
+	if c.enableDocker && service == "" {
+		// TODO: Implement Docker mode
+		return fmt.Errorf("docker mode not yet implemented")
 	}
-	
-	return c.stopService(domain.ServiceLight)
+
+	// Light mode handling
+	if c.isLight {
+		if service != "" && service != domain.ServiceLight {
+			utils.Error("light mode only has light instance")
+			return nil
+		}
+		if err := c.stopService(domain.ServiceLight); err != nil {
+			return err
+		}
+	} else if service == "" {
+		// Ultra mode: stop services in reverse order
+		services := []string{
+			domain.ServicePortal,
+			domain.ServiceDog,
+			domain.ServiceController,
+			domain.ServiceCompute,
+			domain.ServiceTxPool,
+			domain.ServiceStorage,
+			domain.ServiceETCD,
+		}
+		for _, svc := range services {
+			if err := c.stopService(svc); err != nil {
+				return err
+			}
+		}
+	} else {
+		// Stop specific service
+		if err := c.stopService(service); err != nil {
+			return err
+		}
+	}
+
+	// Check status after stopping
+	return c.Status(service)
 }
 
 
@@ -137,44 +241,92 @@ func (c *Composer) getEtcdEndpoints() []string {
 	return endpoints
 }
 
-func (c *Composer) statusInstance(inst *domain.Instance) error {
-	// Check if process is running
-	cmd := exec.Command("pgrep", "-f", inst.Service)
-	output, err := cmd.Output()
+// statusHost checks status of all instances on a specific host
+// Matches Python's status_host method exactly
+func (c *Composer) statusHost(sshClient *ssh.Client, service string, instances []*domain.Instance) error {
+	// Get host from the first instance
+	var host string
+	if len(instances) > 0 {
+		host = instances[0].IP
+		if host == "" {
+			host = instances[0].Host
+		}
+	}
+
+	// Collect service names
+	services := make(map[string]bool)
+	for _, inst := range instances {
+		services[inst.Service] = true
+	}
+
+	// Build grep pattern
+	var serviceNames []string
+	for svc := range services {
+		serviceNames = append(serviceNames, svc)
+	}
+	pattern := strings.Join(serviceNames, "|")
+
+	// Execute ps command
+	cmd := fmt.Sprintf("ps -eo pid,user,cmd | grep -E '%s' | grep -v grep | grep -v watchdog", pattern)
+	output, err := sshClient.RunCommand(cmd)
 	if err != nil {
-		utils.Info("  %s: STOPPED", inst.Name)
-		return nil
+		return nil // No processes found is not an error
 	}
-	
-	if len(strings.TrimSpace(string(output))) > 0 {
-		utils.Info("  %s: RUNNING", inst.Name)
-	} else {
-		utils.Info("  %s: STOPPED", inst.Name)
+
+	// Parse output
+	lines := strings.Split(output, "\n")
+	var results []string
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		// Parse: pid user cmd
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+
+		pid := fields[0]
+		user := fields[1]
+		cmdStr := strings.Join(fields[2:], " ")
+
+		// Get working directory
+		pwdCmd := fmt.Sprintf("pwdx %s", pid)
+		pwdOutput, err := sshClient.RunCommand(pwdCmd)
+		if err != nil {
+			continue
+		}
+
+		// Parse working directory: pid: work_dir
+		parts := strings.Split(strings.TrimSpace(pwdOutput), ":")
+		if len(parts) != 2 {
+			continue
+		}
+		workDir := parts[1]
+
+		// Validate working directory
+		deployDir := c.domain.DeployDir
+		if deployDir == "" {
+			deployDir = fmt.Sprintf("/data/pharos-node/%s", c.domain.DomainLabel)
+		}
+
+		if !strings.Contains(workDir, deployDir) {
+			continue
+		}
+
+		// Format output: host<15 pid<8 user<12 workDir<48 cmd
+		lineStr := fmt.Sprintf("%-15s %-8s %-12s %-48s %s",
+			host, pid, user, workDir, cmdStr)
+		results = append(results, lineStr)
 	}
-	
+
+	// Output results
+	for _, result := range results {
+		fmt.Println(result)
+	}
+
 	return nil
-}
-
-
-
-
-func (c *Composer) getBinaryName(service string) string {
-	// Binary name mapping matching Python's BINARY_MAP
-	binaryMap := map[string]string{
-		"etcd":       "etcd",           // SERVICE_ETCD -> ETCD_BIN
-		"storage":    "mygrid_service", // SERVICE_STORAGE -> STORAGE_BIN
-		"portal":     "pharos",         // SERVICE_PORTAL -> PHAROS_BIN
-		"dog":        "pharos",         // SERVICE_DOG -> PHAROS_BIN
-		"txpool":     "pharos",         // SERVICE_TXPOOL -> PHAROS_BIN
-		"controller": "pharos",         // SERVICE_CONTROLLER -> PHAROS_BIN
-		"compute":    "pharos",         // SERVICE_COMPUTE -> PHAROS_BIN
-		"light":      "pharos_light",   // SERVICE_LIGHT -> PHAROS_BIN_LIGHT
-	}
-
-	if binary, exists := binaryMap[service]; exists {
-		return binary
-	}
-
-	// Fallback to service name
-	return service
 }

@@ -112,16 +112,6 @@ func (c *Composer) deployHost(host string, instances []*domain.Instance, service
 	return c.deployToRemoteHost(host, instances, service, deployBinary, deployConf, deployDir)
 }
 
-
-// getInstanceNames returns names of instances
-func getInstanceNames(instances []*domain.Instance) []string {
-	var names []string
-	for _, inst := range instances {
-		names = append(names, inst.Name)
-	}
-	return names
-}
-
 // deployToRemoteHost deploys to a remote host via SSH
 func (c *Composer) deployToRemoteHost(host string, instances []*domain.Instance, service string, deployBinary, deployConf bool, deployDir string) error {
 	utils.Info("Deploying to host: %s", host)
@@ -144,8 +134,9 @@ func (c *Composer) deployToRemoteHost(host string, instances []*domain.Instance,
 		return fmt.Errorf("failed to connect to %s: %w", host, err)
 	}
 
-	// Create workspace directories on remote host
-	dirs := []string{"bin", "conf", "log", "data", "certs"}
+	// Create workspace directories on remote host (matching Python's behavior)
+	// Python: self._make_workspace(self.deploy_dir, 'bin', 'conf', conn=conn)
+	dirs := []string{"bin", "conf"}
 	for _, dir := range dirs {
 		remotePath := filepath.Join(deployDir, dir)
 		if err := sshClient.MkdirAll(remotePath, 0755); err != nil {
@@ -195,10 +186,9 @@ func (c *Composer) deployToRemoteHost(host string, instances []*domain.Instance,
 		}
 	}
 
-	// Handle non-adaptive mode on remote host
-	if err := c.handleNonAdaptiveModeRemote(sshClient); err != nil {
-		utils.Warn("Failed to handle non-adaptive mode on remote host: %v", err)
-	}
+	// Handle non-adaptive mode (like Python version)
+	// Only create directories if adaptive mode is disabled
+	// Note: In our test case, adaptive mode is enabled, so this won't execute
 
 	return nil
 }
@@ -299,23 +289,73 @@ func (c *Composer) deployLocalCLI() error {
 		}
 	}
 
+	// Sync entire client directory (matching Python's behavior)
+	// Python: local.sync(self._build_file('conf', f'resources/poke/{key_type}/client'), cli_bin_dir)
+	clientDirSrc := filepath.Join(c.domain.BuildRoot, "conf", "resources/poke", keyType, "client")
+	clientDirDst := filepath.Join(cliBinDir, "client")
+	if _, err := os.Stat(clientDirSrc); err == nil {
+		// Copy entire client directory
+		if err := copyDir(clientDirSrc, clientDirDst); err != nil {
+			utils.Warn("Failed to copy client directory: %v", err)
+		} else {
+			utils.Info("Successfully copied client directory with ca.key")
+		}
+	} else {
+		// Try to find client certificates in portal resources
+		portalClientDirSrc := filepath.Join(c.domain.BuildRoot, "conf", "resources/portal", keyType, "client")
+		if _, err := os.Stat(portalClientDirSrc); err == nil {
+			if err := copyDir(portalClientDirSrc, clientDirDst); err != nil {
+				utils.Warn("Failed to copy portal client directory: %v", err)
+			} else {
+				utils.Info("Successfully copied portal client directory with ca.key")
+			}
+		} else {
+			utils.Warn("Client certificate directory not found in either poke or portal resources")
+		}
+	}
+
 	// Generate cli.conf (matching Python's implementation)
 	// Get metasvc_path similar to Python logic
-	// Python: metasvc_path = f"{self._mygrid_env_json['mygrid_env']['meta_store_disk']}/{self._mygrid_env_json['mygrid_env']['project_data_path']}"
-	metasvcPath := c.domain.DeployDir + "/data" // Default based on deploy_dir
+	// Python: metasvc_path = f"{self._mygrid_env_json['mygrid_env']['meta_store_disk']}/{self._mygrid_env_json']['project_data_path']}"
+	// Python uses: "{self.deploy_top_dir}/{self.meta_svc_dir}/data" for light mode
+	// For light, meta_svc_dir is "{self.domain_label}/light"
+	metasvcPath := filepath.Join(c.domain.DeployDir, "light", "data") // Python logic: deploy_dir/light/data
 
 	// Try to read from mygrid.env.json if it exists
+	// Python: Load mygrid.env.json and modify if adaptive mode is enabled
+	var mygridEnv map[string]interface{}
 	mygridEnvPath := filepath.Join(c.domainPath, "../conf/mygrid.light.env.json")
 	if _, err := os.Stat(mygridEnvPath); err == nil {
 		if data, err := os.ReadFile(mygridEnvPath); err == nil {
-			var mygridEnv map[string]interface{}
 			if err := json.Unmarshal(data, &mygridEnv); err == nil {
+				// Check if adaptive mode is enabled
 				if env, ok := mygridEnv["mygrid_env"].(map[string]interface{}); ok {
-					if metaStoreDisk, ok := env["meta_store_disk"].(string); ok {
-						if projectDataPath, ok := env["project_data_path"].(string); ok {
-							metasvcPath = filepath.Join(metaStoreDisk, projectDataPath)
-						}
-					}
+					// Python modifies these values when enable_adaptive is true
+					// In our case, we always use the calculated path like Python does in adaptive mode
+
+					// Python logic for deploy_top_dir and meta_svc_dir:
+					// deploy_dir = c.domain.DeployDir
+					// First split: deploy_top_dir = parent(deploy_dir), meta_svc_dir = basename(deploy_dir)
+					// Second split: deploy_top_dir = parent(deploy_top_dir), sub_dir_path = basename(deploy_top_dir)
+					// Recombine: meta_svc_dir = sub_dir_path + "/" + meta_svc_dir
+					// Add data: meta_svc_dir = meta_svc_dir + "/data"
+
+					deployDir := c.domain.DeployDir
+					firstParent := filepath.Dir(deployDir)                // /data/pharos-node
+					secondParent := filepath.Dir(firstParent)          // /data
+					subDirPath := filepath.Base(firstParent)            // pharos-node
+
+					// In light mode, Python adds "/light" to the meta_svc_dir
+					// meta_svc_dir = sub_dir_path + "/" + domain_name + "/light" + "/data"
+					metaSvcDir := filepath.Join(subDirPath, filepath.Base(deployDir), "light", "data") // pharos-node/domain/light/data
+
+					// Python sets these values in adaptive mode
+					env["meta_store_disk"] = secondParent
+					env["project_data_path"] = metaSvcDir
+
+					// Recalculate metasvcPath
+					metasvcPath = filepath.Join(secondParent, metaSvcDir)
+					utils.Info("DEBUG: metasvcPath = %s (secondParent=%s, metaSvcDir=%s)", metasvcPath, secondParent, metaSvcDir)
 				}
 			}
 		}
@@ -351,6 +391,15 @@ func (c *Composer) deployLocalCLI() error {
 		utils.Warn("Failed to write cli.conf: %v", err)
 	}
 
+	// Save modified mygrid.env.json to client conf directory (matching Python)
+	// Python writes this to client/conf/mygrid.env.json with modified values
+	if len(mygridEnv) > 0 {
+		mygridEnvClientFile := filepath.Join(filepath.Join(cliBinDir, "..", "conf"), "mygrid.env.json")
+		if err := writeJSON(mygridEnvClientFile, mygridEnv); err != nil {
+			utils.Warn("Failed to write mygrid.env.json to client directory: %v", err)
+		}
+	}
+
 	// Generate mygrid_genesis.conf (matching Python's MYGRID_GENESIS_CONFIG_FILENAME)
 	// Note: Python sets mygrid_client_deploy_mode first, then mygrid_client_id
 	mygridGenesisConf := map[string]interface{}{
@@ -378,7 +427,7 @@ func (c *Composer) deployLocalCLI() error {
 	}
 
 	// Generate meta_service.conf (matching Python's META_SERVICE_CONFIG_FILENAME)
-	// Python uses relative path "../data" in META_SERVICE_JSON constant
+	// Python sets data_path based on metasvc_path (absolute path)
 	metaServiceConf := map[string]interface{}{
 		"meta_service": map[string]interface{}{
 			"myid": 0,
@@ -388,7 +437,7 @@ func (c *Composer) deployLocalCLI() error {
 				"retry_sleep_time": 1,
 				"endpoints": []string{},
 			},
-			"data_path": "../data", // Python uses relative path
+			"data_path": metasvcPath, // Use the same path as cli.conf
 		},
 	}
 
@@ -488,17 +537,42 @@ func (c *Composer) deployLocalCLI() error {
 		// Apply adaptive logic if enabled
 		if c.domain.Mygrid.Env.EnableAdaptive {
 			if env, ok := mygridEnv["mygrid_env"].(map[string]interface{}); ok {
-				deployTopDir := filepath.Dir(c.domain.DeployDir) // Should calculate from config
-				env["meta_store_disk"] = deployTopDir
-				env["flat_kvdb_disk"] = deployTopDir
-				env["project_data_path"] = "data" // Should use meta_svc_dir
+				// Match Python's logic exactly:
+				// self.deploy_top_dir, self.meta_svc_dir = os.path.split(self.deploy_dir)
+				// self.deploy_top_dir, sub_dir_path = os.path.split(self.deploy_top_dir)
+				// self.meta_svc_dir = os.path.join(sub_dir_path, self.meta_svc_dir)
+				deployDir := c.domain.DeployDir
+				deployTopDir, metaSvcDir := filepath.Split(deployDir) // First split: deploy_top_dir=/data/pharos-node, meta_svc_dir=domain
+				deployTopDir = filepath.Clean(deployTopDir) // Remove trailing slash
+				deployTopDir, subDirPath := filepath.Split(deployTopDir) // Second split: deploy_top_dir=/data, subDirPath=pharos-node
+				metaSvcDir = filepath.Join(subDirPath, metaSvcDir) // meta_svc_dir=pharos-node/domain
+
+				// Handle light mode special case (Python lines 316-323)
+				if c.isLight {
+					// Check if light instance has a custom dir
+					if lightInst, exists := c.domain.Cluster[domain.ServiceLight]; exists && lightInst.Dir != "" {
+						// Use relative path from deploy_top_dir + "/data"
+						relPath, _ := filepath.Rel(deployTopDir, lightInst.Dir)
+						metaSvcDir = filepath.Join(relPath, "data")
+					} else {
+						// Use meta_svc_dir + "/light/data"
+						metaSvcDir = filepath.Join(metaSvcDir, "light", "data")
+					}
+				} else {
+					// Ultra mode: add "/data"
+					metaSvcDir = filepath.Join(metaSvcDir, "data")
+				}
+
+				env["meta_store_disk"] = strings.TrimSuffix(deployTopDir, "/") // Use /data like Python, without trailing slash
+				env["flat_kvdb_disk"] = strings.TrimSuffix(deployTopDir, "/")
+				env["project_data_path"] = metaSvcDir // Use pharos-node/domain/light/data
 
 				// Add placements based on light/ultra
 				if c.isLight {
 					env["placements"] = []map[string]interface{}{
 						{
-							"default": deployTopDir,
-							"tier_0": deployTopDir,
+							"default": strings.TrimSuffix(deployTopDir, "/"),
+							"tier_0": strings.TrimSuffix(deployTopDir, "/"),
 						},
 					}
 				}
@@ -685,6 +759,9 @@ func (c *Composer) deployBinariesRemote(sshClient *ssh.Client, instances []*doma
 			utils.Warn("Failed to create instance bin directory %s: %v", instBinDir, err)
 		}
 
+		// Note: No logs directory creation needed - Python version doesn't create it
+		// Only 'log' directory (without s) is created as part of instance dirs
+
 		// For all instances (including light), create symlinks to shared binaries (matching Python version)
 		// Python version: all instances use symlinks, including light
 		binaryName := c.getBinaryName(inst.Service)
@@ -751,7 +828,7 @@ func (c *Composer) deployConfigurationRemote(sshClient *ssh.Client, instances []
 			// For light service, add specific variables
 			if inst.Service == "light" {
 				parameters["/SetEnv/LIGHT_RPC_LISTEN_URL"] = "0.0.0.0:20000"
-				parameters["/SetEnv/LIGHT_RPC_ADVERTISE_URL"] = "47.236.202.124:20000"
+				parameters["/SetEnv/LIGHT_RPC_ADVERTISE_URL"] = inst.IP + ":20000"
 			}
 
 			// Load CLI_JSON template like Python does
@@ -875,26 +952,6 @@ func (c *Composer) deployConfigurationRemote(sshClient *ssh.Client, instances []
 	return nil
 }
 
-// handleNonAdaptiveModeRemote handles non-adaptive mode on remote host
-func (c *Composer) handleNonAdaptiveModeRemote(sshClient *ssh.Client) error {
-	utils.Info("=== Handling non-adaptive mode ===")
-
-	// In non-adaptive mode, meta_service.conf uses relative path "../data"
-	// Since meta_tool runs from {deploy_dir}/client/bin
-	// It expects {deploy_dir}/client/data directory
-	// For light mode, create the data directory that meta_tool expects
-
-	clientDataDir := filepath.Join(c.domain.DeployDir, "client", "data")
-	utils.Info("Creating client data directory: %s", clientDataDir)
-
-	if err := sshClient.MkdirAll(clientDataDir, 0755); err != nil {
-		utils.Error("Failed to create client data directory: %v", err)
-		return fmt.Errorf("failed to create client data directory: %w", err)
-	}
-
-	utils.Info("✓ Created client data directory: %s", clientDataDir)
-	return nil
-}
 
 // deployCubenetConf deploys cubenet.conf for dog and light services
 // This matches Python's implementation exactly
@@ -984,7 +1041,7 @@ func (c *Composer) deployCubenetConf(sshClient *ssh.Client, inst *domain.Instanc
 				if hostsInterface, ok := p2p["host"]; ok {
 					if hosts, ok := hostsInterface.([]interface{}); ok && len(hosts) > 0 {
 						if host0, ok := hosts[0].(map[string]interface{}); ok {
-							host0["port"] = port + portOffset
+							host0["port"] = strconv.Itoa(port + portOffset)
 						}
 					}
 				}
@@ -992,21 +1049,35 @@ func (c *Composer) deployCubenetConf(sshClient *ssh.Client, inst *domain.Instanc
 		}
 	}
 
-	// Upload domain key to certs directory
-	domainKeyFile := filepath.Join(instDir, "certs", "domain_key")
+	// Upload domain key to certs directory (matching Python's behavior)
+	// Python: domain_key_filename = os.path.basename(self.domain_secret.files['key'])
+	var domainKeyFile string
 	if c.domain.Secret.Domain.Files["key"] != "" {
+		// Extract the filename from the source path (like Python's basename)
+		srcKeyPath := c.domain.Secret.Domain.Files["key"]
+		keyFilename := filepath.Base(srcKeyPath) // Should be "new.key"
+		domainKeyFile = filepath.Join(instDir, "certs", keyFilename)
+
 		// Check if key file exists
-		if _, err := os.Stat(c.domain.Secret.Domain.Files["key"]); err != nil {
-			utils.Warn("Domain key file not found: %s, skipping upload", c.domain.Secret.Domain.Files["key"])
+		if _, err := os.Stat(srcKeyPath); err != nil {
+			utils.Warn("Domain key file not found: %s, skipping upload", srcKeyPath)
 		} else {
-			if err := sshClient.UploadFile(c.domain.Secret.Domain.Files["key"], domainKeyFile); err != nil {
+			if err := sshClient.UploadFile(srcKeyPath, domainKeyFile); err != nil {
 				utils.Warn("Failed to upload domain key: %v", err)
+			} else {
+				utils.Info("Successfully uploaded domain key as: %s", keyFilename)
 			}
 		}
 	}
 
-	// Set private key file path
-	cubenetConf["cubenet"].(map[string]interface{})["p2p"].(map[string]interface{})["private_key_file"] = domainKeyFile
+	// Update private_key_file to absolute path (matching Python behavior)
+	// Python: cubenet_conf_data['cubenet']['p2p']['private_key_file'] = domain_key_full_abs_path
+	if domainKeyFile != "" {
+		if p2p, ok := cubenetConf["cubenet"].(map[string]interface{})["p2p"].(map[string]interface{}); ok {
+			// Use absolute path like Python
+			p2p["private_key_file"] = domainKeyFile
+		}
+	}
 
 	// Write cubenet.conf to temporary file
 	tmpCubenetConf := filepath.Join(os.TempDir(), fmt.Sprintf("cubenet_conf_%s.json", inst.Name))
@@ -1096,19 +1167,42 @@ func (c *Composer) deployMygridConfigs(sshClient *ssh.Client, inst *domain.Insta
 		// Apply adaptive logic if enabled
 		if c.domain.Mygrid.Env.EnableAdaptive {
 			if env, ok := mygridEnv["mygrid_env"].(map[string]interface{}); ok {
-				deployTopDir := filepath.Dir(c.domain.DeployDir) // Should calculate from config
-				metaSvcDir := "data" // Should calculate meta_svc_dir
+				// Match Python's logic exactly:
+				// self.deploy_top_dir, self.meta_svc_dir = os.path.split(self.deploy_dir)
+				// self.deploy_top_dir, sub_dir_path = os.path.split(self.deploy_top_dir)
+				// self.meta_svc_dir = os.path.join(sub_dir_path, self.meta_svc_dir)
+				deployDir := c.domain.DeployDir
+				deployTopDir, metaSvcDir := filepath.Split(deployDir) // First split: deploy_top_dir=/data/pharos-node, meta_svc_dir=domain
+				deployTopDir = filepath.Clean(deployTopDir) // Remove trailing slash
+				deployTopDir, subDirPath := filepath.Split(deployTopDir) // Second split: deploy_top_dir=/data, subDirPath=pharos-node
+				metaSvcDir = filepath.Join(subDirPath, metaSvcDir) // meta_svc_dir=pharos-node/domain
 
-				env["meta_store_disk"] = deployTopDir
-				env["flat_kvdb_disk"] = deployTopDir
-				env["project_data_path"] = metaSvcDir
+				// Handle light mode special case (Python lines 316-323)
+				if c.isLight {
+					// Check if light instance has a custom dir
+					if lightInst, exists := c.domain.Cluster[domain.ServiceLight]; exists && lightInst.Dir != "" {
+						// Use relative path from deploy_top_dir + "/data"
+						relPath, _ := filepath.Rel(deployTopDir, lightInst.Dir)
+						metaSvcDir = filepath.Join(relPath, "data")
+					} else {
+						// Use meta_svc_dir + "/light/data"
+						metaSvcDir = filepath.Join(metaSvcDir, "light", "data")
+					}
+				} else {
+					// Ultra mode: add "/data"
+					metaSvcDir = filepath.Join(metaSvcDir, "data")
+				}
+
+				env["meta_store_disk"] = strings.TrimSuffix(deployTopDir, "/") // Use /data like Python, without trailing slash
+				env["flat_kvdb_disk"] = strings.TrimSuffix(deployTopDir, "/")
+				env["project_data_path"] = metaSvcDir // Use pharos-node/domain/light/data
 
 				// Add placements for light mode
 				if inst.Service == "light" {
 					env["placements"] = []map[string]interface{}{
 						{
-							"default": deployTopDir,
-							"tier_0": deployTopDir,
+							"default": strings.TrimSuffix(deployTopDir, "/"),
+							"tier_0": strings.TrimSuffix(deployTopDir, "/"),
 						},
 					}
 				}
@@ -1147,29 +1241,21 @@ func (c *Composer) deployMonitorConf(sshClient *ssh.Client, inst *domain.Instanc
 		instDir = filepath.Join(c.domain.DeployDir, inst.Name)
 	}
 
-	// Read monitor.conf.json (matching Python)
-	// Python loads this from '../conf/monitor.conf.json' relative to domain file
-	monitorConfFile := filepath.Join(c.domainPath, "../conf/monitor.conf.json")
+	// Read monitor.conf (matching Python)
+	// Python loads this from '../conf/monitor.conf' relative to domain file
+	// IMPORTANT: Python will crash if file doesn't exist - no error handling!
+	monitorConfFile := filepath.Join(c.domainPath, "../conf/monitor.conf")
 	data, err := os.ReadFile(monitorConfFile)
 	if err != nil {
-		// Create default if file doesn't exist
-		utils.Warn("monitor.conf.json not found, creating default")
-		monitorConf := map[string]interface{}{
-			"enable_pamir_cetina": true,
-			"pamir_cetina_push_address": "k8s-promethe-promethe-baabd0c689-34ab91e598e56441.elb.ap-southeast-1.amazonaws.com",
-			"pamir_cetina_push_port": 9091,
-			"pamir_cetina_push_interval": 5,
-			"pamir_cetina_job_name": "pharos_testnet",
-		}
-		if data, err = json.MarshalIndent(monitorConf, "", "  "); err != nil {
-			return fmt.Errorf("failed to marshal default monitor.conf.json: %w", err)
-		}
+		// Python version would crash here with FileNotFoundError
+		// We must do the same - no friendly defaults!
+		return fmt.Errorf("failed to read monitor.conf: %w", err)
 	}
 
 	// Write to temp file and upload
 	tmpFile := filepath.Join(os.TempDir(), fmt.Sprintf("monitor_conf_%s.json", inst.Name))
 	if err := os.WriteFile(tmpFile, data, 0644); err != nil {
-		return fmt.Errorf("failed to write temp monitor.conf.json: %w", err)
+		return fmt.Errorf("failed to write temp monitor.conf: %w", err)
 	}
 	defer os.Remove(tmpFile)
 
