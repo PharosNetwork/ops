@@ -28,7 +28,7 @@ var restartCmd = &cobra.Command{
 		}
 		
 		// Then start
-		return c.Start("")
+		return c.Start("", "")
 	},
 }
 
