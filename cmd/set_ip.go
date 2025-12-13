@@ -53,7 +53,6 @@ var setIPCmd = &cobra.Command{
 						for _, nodeData := range cluster {
 							if node, ok := nodeData.(map[string]interface{}); ok {
 								node["host"] = ip
-								node["ip"] = ip
 								utils.Info("Updated %s node IP to %s", domainName, ip)
 							}
 						}
