@@ -168,12 +168,16 @@ func (c *Composer) Start(service string, extraMygridServiceArgs string) error {
 }
 
 func (c *Composer) Stop(service string) error {
-	utils.Info("Stopping %s, service: %s", c.domain.DomainLabel, service)
+	utils.Info("stop %s, service: %s", c.domain.DomainLabel, service)
 
 	// Docker mode handling
 	if c.enableDocker && service == "" {
-		// TODO: Implement Docker mode
-		return fmt.Errorf("docker mode not yet implemented")
+		// Stop all services via Docker Compose
+		if err := c.stopServiceDocker(); err != nil {
+			return err
+		}
+		// Show status after stopping
+		return c.Status("")
 	}
 
 	// Light mode handling

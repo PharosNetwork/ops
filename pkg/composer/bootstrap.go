@@ -901,6 +901,44 @@ func (c *Composer) getBinaryName(service string) string {
 	return service
 }
 
+// stopServiceDocker stops all services via Docker Compose
+func (c *Composer) stopServiceDocker() error {
+	// Group instances by host (use all instances)
+	hosts := make(map[string][]*domain.Instance)
+	for _, inst := range c.domain.Cluster {
+		host := inst.Host
+		if host == "" {
+			host = inst.IP
+		}
+		hosts[host] = append(hosts[host], inst)
+	}
+
+	// Sequential stop, not parallel
+	for host, instances := range hosts {
+		user := c.domain.RunUser
+		if host == "127.0.0.1" || host == "localhost" {
+			user = ""
+		}
+
+		sshClient, err := ssh.NewClient(host, user)
+		if err != nil {
+			return fmt.Errorf("failed to create SSH client for %s: %w", host, err)
+		}
+		defer sshClient.Close()
+
+		if err := sshClient.Connect(); err != nil {
+			return fmt.Errorf("failed to connect to %s: %w", host, err)
+		}
+
+		// Stop all services on this host via Docker
+		if err := c.stopHost(sshClient, "", instances); err != nil {
+			return fmt.Errorf("failed to stop service on %s: %w", host, err)
+		}
+	}
+
+	return nil
+}
+
 // stopService stops a service
 // Matches Python's stop_service method
 func (c *Composer) stopService(serviceType string) error {
@@ -945,6 +983,23 @@ func (c *Composer) stopHost(sshClient *ssh.Client, service string, instances []*
 		if host == "" {
 			host = instances[0].Host
 		}
+	}
+
+	// Docker mode handling
+	if c.enableDocker && service == "" {
+		// Stop all services via docker compose
+		deployDir := c.domain.DeployDir
+		if deployDir == "" {
+			deployDir = fmt.Sprintf("/data/pharos-node/%s", c.domain.DomainLabel)
+		}
+		cmd := fmt.Sprintf("cd %s; docker compose stop", deployDir)
+		_, err := sshClient.RunCommand(cmd)
+		return err // Don't mask errors in Docker mode
+	}
+
+	// Get host for logging (if not in Docker mode)
+	if host == "" {
+		host = "unknown"
 	}
 
 	utils.Info("Stopping service %s on %s", service, host)
@@ -995,38 +1050,43 @@ func (c *Composer) stopHost(sshClient *ssh.Client, service string, instances []*
 }
 
 // gracefulStopInstance gracefully stops an instance
-// Matches Python's graceful_stop_instance method
+// Matches Python's graceful_stop_instance method exactly
 func (c *Composer) gracefulStopInstance(inst *domain.Instance, sshClient *ssh.Client) error {
+	if c.enableDocker {
+		// Docker mode: use docker compose stop
+		deployDir := c.domain.DeployDir
+		if deployDir == "" {
+			deployDir = fmt.Sprintf("/data/pharos-node/%s", c.domain.DomainLabel)
+		}
+		cmd := fmt.Sprintf("cd %s; docker compose stop %s", deployDir, inst.Name)
+		_, err := sshClient.RunCommand(cmd)
+		return err
+	}
+
+	// Process mode: use complex pipeline like Python
 	binary := c.getBinaryName(inst.Service)
 	workDir := c.getInstanceDir(inst) + "/bin"
 
-	// Build graceful stop command
-	// Use while loop to find and kill processes with specific working directory
-	cmd := fmt.Sprintf(`ps -eo pid,cmd | grep '%s' | grep -v grep | while read pid cmd; do
-		workdir=$(pwdx $pid 2>/dev/null | cut -d: -f2)
-		if [ "$workdir" = "%s" ]; then
-			kill $pid 2>/dev/null
-		fi
-	done`, binary, workDir)
+	// Build command matching Python's complex pipeline
+	// Python: ps -eo pid,cmd | grep 'binary' | awk '{system("pwdx "$1" 2>&1")}' | grep -v MATCH_MATCH | sed "s#work_dir#MATCH_MATCH#g" | grep MATCH_MATCH | awk -F: '{system("kill -15 "$1" 2>&1")}'
+	cmd := fmt.Sprintf(`ps -eo pid,cmd | grep '%s' | grep -v grep | awk '{system("pwdx "$1" 2>&1")}' | grep -v MATCH_MATCH | sed "s#%s#MATCH_MATCH#g" | grep MATCH_MATCH | awk -F: '{system("kill -15 "$1" 2>&1")}'`,
+		binary, workDir)
 
 	_, err := sshClient.RunCommand(cmd)
 	return err
 }
 
 // forceStopInstance forcefully stops an instance
-// Matches Python's stop_instance method
+// Matches Python's stop_instance method exactly
 func (c *Composer) forceStopInstance(inst *domain.Instance, sshClient *ssh.Client) error {
+	// Process mode only (Docker mode doesn't need force stop)
 	binary := c.getBinaryName(inst.Service)
 	workDir := c.getInstanceDir(inst) + "/bin"
 
-	// Build force stop command
-	// Use kill -9 to force terminate
-	cmd := fmt.Sprintf(`ps -eo pid,cmd | grep '%s' | grep -v grep | while read pid cmd; do
-		workdir=$(pwdx $pid 2>/dev/null | cut -d: -f2)
-		if [ "$workdir" = "%s" ]; then
-			kill -9 $pid 2>/dev/null
-		fi
-	done`, binary, workDir)
+	// Build command matching Python's complex pipeline
+	// Python: ps -eo pid,cmd | grep 'binary' | awk '{system("pwdx "$1" 2>&1")}' | grep -v MATCH_MATCH | sed "s#work_dir#MATCH_MATCH#g" | grep MATCH_MATCH | awk -F: '{system("kill -9 "$1" 2>&1")}'
+	cmd := fmt.Sprintf(`ps -eo pid,cmd | grep '%s' | grep -v grep | awk '{system("pwdx "$1" 2>&1")}' | grep -v MATCH_MATCH | sed "s#%s#MATCH_MATCH#g" | grep MATCH_MATCH | awk -F: '{system("kill -9 "$1" 2>&1")}'`,
+		binary, workDir)
 
 	_, err := sshClient.RunCommand(cmd)
 	return err
@@ -1089,8 +1149,16 @@ func (c *Composer) hasRunningProcess(sshClient *ssh.Client, service string, inst
 				}
 
 				parts := strings.Split(strings.TrimSpace(pwdOutput), ":")
-				if len(parts) == 2 && parts[1] == workDirs[binary] {
-					return true, nil // Found matching process
+				if len(parts) == 2 {
+					workDir := parts[1]
+					// Check if deploy_dir is contained in the working directory (substring match like Python)
+					deployDir := c.domain.DeployDir
+					if deployDir == "" {
+						deployDir = fmt.Sprintf("/data/pharos-node/%s", c.domain.DomainLabel)
+					}
+					if strings.Contains(workDir, deployDir) {
+						return true, nil // Found matching process
+					}
 				}
 			}
 		}
