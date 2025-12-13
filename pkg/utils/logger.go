@@ -7,7 +7,7 @@ import (
 
 var (
 	debugMode = false
-	logger    = log.New(os.Stdout, "", log.LstdFlags)
+	logger    = log.New(os.Stdout, "", 0) // Remove timestamp
 )
 
 func SetDebug(debug bool) {

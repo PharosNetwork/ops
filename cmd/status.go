@@ -42,5 +42,5 @@ func init() {
 
 	// Add flags matching Python version
 	statusCmd.Flags().StringVarP(&statusService, "service", "s", "",
-		"service to check status [etcd|storage|portal|dog|txpool|controller|compute]")
+		"service [etcd|mygrid_service|portal|dog|txpool|controller|compute]]")
 }

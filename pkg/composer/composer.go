@@ -49,9 +49,10 @@ func New(domainFile string) (*Composer, error) {
 	utils.Debug("BuildRoot: %s", d.BuildRoot)
 
 	c := &Composer{
-		domain:     &d,
-		domainPath: filepath.Dir(absPath),
-		isLight:    false,
+		domain:       &d,
+		domainPath:   filepath.Dir(absPath),
+		isLight:      false,
+		enableDocker: d.Docker.Enable,
 	}
 
 	// Set instance names (matching Python: instance.name = name)
@@ -253,6 +254,33 @@ func (c *Composer) statusHost(sshClient *ssh.Client, service string, instances [
 		}
 	}
 
+	// Handle Docker mode
+	if c.enableDocker {
+		// Print host name
+		fmt.Printf("%s\n", host)
+
+		// Get deploy directory
+		deployDir := c.domain.DeployDir
+		if deployDir == "" {
+			deployDir = fmt.Sprintf("/data/pharos-node/%s", c.domain.DomainLabel)
+		}
+
+		// Build docker compose command
+		cmd := fmt.Sprintf("cd %s; docker compose ps -a", deployDir)
+		if service != "" {
+			cmd += fmt.Sprintf(" | grep %s", service)
+		}
+
+		// Execute command (warn=True in Python means we shouldn't error on failure)
+		_, err := sshClient.RunCommand(cmd)
+		if err != nil {
+			// Docker command failed, but we don't treat it as an error (matching Python's warn=True)
+			return nil
+		}
+		return nil
+	}
+
+	// Process mode
 	// Collect service names
 	services := make(map[string]bool)
 	for _, inst := range instances {
@@ -266,8 +294,9 @@ func (c *Composer) statusHost(sshClient *ssh.Client, service string, instances [
 	}
 	pattern := strings.Join(serviceNames, "|")
 
-	// Execute ps command
+	// Execute ps command with hide=True (Python equivalent)
 	cmd := fmt.Sprintf("ps -eo pid,user,cmd | grep -E '%s' | grep -v grep | grep -v watchdog", pattern)
+	utils.Debug(cmd)
 	output, err := sshClient.RunCommand(cmd)
 	if err != nil {
 		return nil // No processes found is not an error
