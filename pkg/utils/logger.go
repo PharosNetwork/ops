@@ -16,23 +16,23 @@ func SetDebug(debug bool) {
 
 func Debug(format string, args ...interface{}) {
 	if debugMode {
-		logger.Printf("[DEBUG] "+format, args...)
+		logger.Printf("DEBUG: "+format, args...)
 	}
 }
 
 func Info(format string, args ...interface{}) {
-	logger.Printf("[INFO] "+format, args...)
+	logger.Printf("INFO: "+format, args...)
 }
 
 func Warn(format string, args ...interface{}) {
-	logger.Printf("[WARN] "+format, args...)
+	logger.Printf("WARN: "+format, args...)
 }
 
 func Error(format string, args ...interface{}) {
-	logger.Printf("[ERROR] "+format, args...)
+	logger.Printf("ERROR: "+format, args...)
 }
 
 func Fatal(format string, args ...interface{}) {
-	logger.Printf("[FATAL] "+format, args...)
+	logger.Printf("FATAL: "+format, args...)
 	os.Exit(1)
 }

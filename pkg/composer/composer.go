@@ -116,11 +116,11 @@ func (c *Composer) Status(service string) error {
 	return nil
 }
 
-func (c *Composer) Start(service string, extraStorageArgs string) error {
+func (c *Composer) Start(service string, extraMygridServiceArgs string) error {
 	utils.Info("Starting %s, service: %s", c.domain.DomainLabel, service)
 
 	// Save extra storage args for performance testing scenarios
-	c.extraStorageArgs = extraStorageArgs
+	c.extraStorageArgs = extraMygridServiceArgs
 
 	// Check Docker mode (if implemented)
 	if c.enableDocker && service == "" {
