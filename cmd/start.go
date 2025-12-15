@@ -9,8 +9,8 @@ import (
 )
 
 var (
-	startService       string
-	extraStorageArgs   string
+	startService         string
+	extraMygridServiceArgs string
 )
 
 var startCmd = &cobra.Command{
@@ -28,7 +28,7 @@ var startCmd = &cobra.Command{
 				continue
 			}
 
-			if err := c.Start(startService, extraStorageArgs); err != nil {
+			if err := c.Start(startService, extraMygridServiceArgs); err != nil {
 				utils.Error("Failed to start domain %s: %v", domainFile, err)
 				continue
 			}
@@ -43,7 +43,7 @@ func init() {
 
 	// Add flags matching Python version
 	startCmd.Flags().StringVarP(&startService, "service", "s", "",
-		"service to start [etcd|storage|portal|dog|txpool|controller|compute]")
-	startCmd.Flags().StringVarP(&extraStorageArgs, "extra-storage-args", "a", "",
+		"service [etcd|mygrid_service|portal|dog|txpool|controller|compute]]")
+	startCmd.Flags().StringVarP(&extraMygridServiceArgs, "extra-mygrid_service-args", "a", "",
 		"extra storage args for storage start command")
 }

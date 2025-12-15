@@ -42,5 +42,5 @@ func init() {
 
 	// Add flags matching Python version
 	stopCmd.Flags().StringVarP(&stopService, "service", "s", "",
-		"service to stop [etcd|storage|portal|dog|txpool|controller|compute]")
+		"service [etcd|mygrid_service|portal|dog|txpool|controller|compute]]")
 }
