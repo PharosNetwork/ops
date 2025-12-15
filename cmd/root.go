@@ -3,6 +3,8 @@ package cmd
 import (
 	"fmt"
 
+	"pharos-ops/pkg/utils"
+
 	"github.com/spf13/cobra"
 )
 
@@ -15,6 +17,7 @@ var (
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
 			if debug {
 				fmt.Println("Debug mode is on")
+				utils.SetDebug(true)
 			}
 		},
 	}

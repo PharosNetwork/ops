@@ -452,7 +452,14 @@ func generateDomainFile(filename, domainName string, domainConfig DomainConfig, 
 		return fmt.Errorf("failed to marshal domain config: %w", err)
 	}
 
-	return os.WriteFile(filename, data, 0644)
+	if err := os.WriteFile(filename, data, 0644); err != nil {
+		return fmt.Errorf("failed to write domain file: %w", err)
+	}
+
+	// Log file dump like Python
+	absPath, _ := filepath.Abs(filename)
+	utils.Info("dump %s file at: %s", filename, absPath)
+	return nil
 }
 
 func generateNodeIDFromDomain(domainName string, deploy DeployConfig) string {
@@ -506,6 +513,9 @@ func generatePrivateKey(keyType, keyDir, keyPasswd string) error {
 	if err := os.MkdirAll(keyDir, 0755); err != nil {
 		return fmt.Errorf("failed to create key directory: %w", err)
 	}
+
+	// Log key generation like Python
+	utils.Info("generate new key %s", filepath.Join(keyDir, "new.key"))
 
 	prikeyPath := filepath.Join(keyDir, "new.key")
 	switch strings.ToLower(keyType) {
