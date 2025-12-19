@@ -27,6 +27,7 @@ type DeployConfig struct {
 	AdminAddr         string                   `json:"admin_addr"`
 	ProxyAdminAddr    string                   `json:"proxy_admin_addr"`
 	GenesisTpl        string                   `json:"genesis_tpl"`
+	RunningConf       string                   `json:"running_conf"`
 	Mygrid            MyGridConfig             `json:"mygrid"`
 	DomainKeyType     string                   `json:"domain_key_type"`
 	ClientKeyType     string                   `json:"client_key_type"`
@@ -51,10 +52,11 @@ type DockerConfig struct {
 }
 
 type CommonConfig struct {
-	Env    map[string]interface{} `json:"env"`
-	Log    map[string]interface{} `json:"log"`
-	Config map[string]interface{} `json:"config"`
-	Gflags map[string]interface{} `json:"gflags"`
+	Env          map[string]interface{} `json:"env"`
+	Log          map[string]interface{} `json:"log"`
+	Config       map[string]interface{} `json:"config"`
+	Gflags       map[string]interface{} `json:"gflags"`
+	MonitorConfig map[string]interface{} `json:"monitor_config"`
 }
 
 type ServiceConfig struct {
@@ -69,6 +71,7 @@ type DomainConfig struct {
 	DeployDir           string        `json:"deploy_dir"`
 	DomainRole          int           `json:"domain_role"`
 	KeyPasswd           string        `json:"key_passwd"`
+	PortalSSLPass       string        `json:"portal_ssl_pass"`
 	DomainPort          int           `json:"domain_port"`
 	ClientTCPPort       int           `json:"client_tcp_port"`
 	ClientWSPort        int           `json:"client_ws_port"`
@@ -76,6 +79,7 @@ type DomainConfig struct {
 	ClientHTTPPort      int           `json:"client_http_port"`
 	Cluster             []ClusterNode `json:"cluster"`
 	InitialStakeInGwei  int64         `json:"initial_stake_in_gwei"`
+	EnableSetkeyEnv     bool          `json:"enable_setkey_env"`
 }
 
 type ClusterNode struct {
@@ -152,6 +156,12 @@ func generateDomainFile(filename, domainName string, domainConfig DomainConfig, 
 		keyPasswd = "123abc"
 	}
 
+	// Determine key file names based on use_generated_keys
+	keySuffix := "new"
+	if deploy.UseGeneratedKeys {
+		keySuffix = "generate"
+	}
+
 	// Create domain structure matching Python output exactly
 	domain := make(map[string]interface{})
 
@@ -161,9 +171,11 @@ func generateDomainFile(filename, domainName string, domainConfig DomainConfig, 
 	domain["chain_protocol"] = deploy.ChainProtocol
 	domain["domain_label"] = domainName
 	domain["version"] = deploy.Version
-	domain["run_user"] = deploy.RunUser
+	// Note: Python version uses "ecs-user" regardless of deploy config
+	domain["run_user"] = "ecs-user"
 	domain["deploy_dir"] = deployDir
-	domain["genesis_conf"] = "../genesis.conf"
+	// Note: Python version always uses "../conf/genesis.aldaba-ng.conf"
+	domain["genesis_conf"] = "../conf/genesis.aldaba-ng.conf"
 
 	// Mygrid config
 	domain["mygrid"] = deploy.Mygrid
@@ -175,58 +187,38 @@ func generateDomainFile(filename, domainName string, domainConfig DomainConfig, 
 	}{
 		KeyType: deploy.DomainKeyType,
 		Files: map[string]string{
-			"key":             fmt.Sprintf("../scripts/resources/domain_keys/%s/%s/new.key", deploy.DomainKeyType, domainName),
-			"key_pub":         fmt.Sprintf("../scripts/resources/domain_keys/%s/%s/new.pub", deploy.DomainKeyType, domainName),
-			"stabilizing_key": fmt.Sprintf("../scripts/resources/domain_keys/bls12381/%s/new.key", domainName),
-			"stabilizing_pk":  fmt.Sprintf("../scripts/resources/domain_keys/bls12381/%s/new.pub", domainName),
+			"key":             fmt.Sprintf("../scripts/resources/domain_keys/%s/%s/%s.key", deploy.DomainKeyType, domainName, keySuffix),
+			"key_pub":         fmt.Sprintf("../scripts/resources/domain_keys/%s/%s/%s.pub", deploy.DomainKeyType, domainName, keySuffix),
+			"stabilizing_key": fmt.Sprintf("../scripts/resources/domain_keys/bls12381/%s/%s.key", domainName, keySuffix),
+			"stabilizing_pk":  fmt.Sprintf("../scripts/resources/domain_keys/bls12381/%s/%s.pub", domainName, keySuffix),
 		},
 	}
 
-	secretClient := struct {
-		KeyType string             `json:"key_type"`
-		Files   map[string]string  `json:"files"`
-	}{
-		KeyType: deploy.ClientKeyType,
-		Files: map[string]string{
-			"ca_cert": fmt.Sprintf("../conf/resources/portal/%s/client/ca.crt", deploy.ClientKeyType),
-			"cert":    fmt.Sprintf("../conf/resources/portal/%s/client/client.crt", deploy.ClientKeyType),
-			"key":     fmt.Sprintf("../conf/resources/portal/%s/client/client.key", deploy.ClientKeyType),
-		},
-	}
-
+	// Note: Python version only includes domain secret, not client
 	domain["secret"] = map[string]interface{}{
 		"domain": secretDomain,
-		"client": secretClient,
 	}
 
 	// Feature flags
 	domain["use_generated_keys"] = deploy.UseGeneratedKeys
-	domain["enable_dora"] = deploy.EnableDora
 	domain["key_passwd"] = keyPasswd
+
+	// Note: Python version doesn't include portal_ssl_pass, running_conf, or enable_setkey_env
 
 	// Docker config
 	domain["docker"] = deploy.Docker
 
 	// Common config - use struct to maintain order
-	// Add metrics field that's expected in domain.json but not in deploy.common
 	common := struct {
-		Env    map[string]interface{} `json:"env"`
-		Log    map[string]interface{} `json:"log"`
-		Config map[string]interface{} `json:"config"`
-		Gflags map[string]interface{} `json:"gflags"`
-		Metrics map[string]interface{} `json:"metrics"`
+		Env          map[string]interface{} `json:"env"`
+		Log          map[string]interface{} `json:"log"`
+		Config       map[string]interface{} `json:"config"`
+		Gflags       map[string]interface{} `json:"gflags"`
 	}{
 		Env:    deploy.Common.Env,
 		Log:    deploy.Common.Log,
 		Config: deploy.Common.Config,
 		Gflags: deploy.Common.Gflags,
-		Metrics: map[string]interface{}{
-			"push_address":  "",
-			"push_interval": "",
-			"enable":        false,
-			"push_port":     "",
-			"job_name":      "",
-		},
 	}
 	domain["common"] = common
 
@@ -287,16 +279,12 @@ func generateDomainFile(filename, domainName string, domainConfig DomainConfig, 
 				rpcPort = clusterNode.StartPort + serviceIndex*1000 + idx
 			}
 
-			// Build instance configuration
+			// Build instance configuration - Python version only includes service, ip, args, env
 			instance := map[string]interface{}{
 				"service": service,
 				"ip":      clusterNode.DeployIP,
-				"host":    clusterNode.Host,
 				"args":    []string{"-d"},
 				"env":     make(map[string]string),
-				"log":     make(map[string]interface{}),
-				"config":  make(map[string]interface{}),
-				"gflags":  make(map[string]interface{}),
 			}
 
 			// Build environment variables based on service type
@@ -332,17 +320,13 @@ func generateDomainFile(filename, domainName string, domainConfig DomainConfig, 
 
 			// Client URL configuration for portal and light
 			if service == "portal" || service == "light" {
-				tcpPort := domainConfig.ClientTCPPort + idx
 				wsPort := domainConfig.ClientWSPort + idx
-				wssPort := domainConfig.ClientWSSPort + idx
 				httpPort := domainConfig.ClientHTTPPort + idx
 
 				var clientUrls []string
 				var clientListenUrls []string
 
-				clientUrls = append(clientUrls, fmt.Sprintf("tls://%s:%d", clusterNode.Host, tcpPort))
-				clientListenUrls = append(clientListenUrls, fmt.Sprintf("tls://0.0.0.0:%d", tcpPort))
-
+				// Note: Python version only includes http and ws URLs, not tls or wss
 				if httpPort > 0 {
 					clientUrls = append(clientUrls, fmt.Sprintf("http://%s:%d", clusterNode.Host, httpPort))
 					clientListenUrls = append(clientListenUrls, fmt.Sprintf("http://0.0.0.0:%d", httpPort))
@@ -351,11 +335,6 @@ func generateDomainFile(filename, domainName string, domainConfig DomainConfig, 
 				if wsPort > 0 {
 					clientUrls = append(clientUrls, fmt.Sprintf("ws://%s:%d", clusterNode.Host, wsPort))
 					clientListenUrls = append(clientListenUrls, fmt.Sprintf("ws://0.0.0.0:%d", wsPort))
-				}
-
-				if wssPort > 0 {
-					clientUrls = append(clientUrls, fmt.Sprintf("wss://%s:%d", clusterNode.Host, wssPort))
-					clientListenUrls = append(clientListenUrls, fmt.Sprintf("wss://0.0.0.0:%d", wssPort))
 				}
 
 				env["CLIENT_ADVERTISE_URLS"] = strings.Join(clientUrls, ",")
@@ -393,18 +372,13 @@ func generateDomainFile(filename, domainName string, domainConfig DomainConfig, 
 
 	// Create ordered secret structure
 	secretFilesDomain := map[string]string{
-		"key":             fmt.Sprintf("../scripts/resources/domain_keys/%s/%s/new.key", deploy.DomainKeyType, domainName),
-		"key_pub":         fmt.Sprintf("../scripts/resources/domain_keys/%s/%s/new.pub", deploy.DomainKeyType, domainName),
-		"stabilizing_key": fmt.Sprintf("../scripts/resources/domain_keys/bls12381/%s/new.key", domainName),
-		"stabilizing_pk":  fmt.Sprintf("../scripts/resources/domain_keys/bls12381/%s/new.pub", domainName),
+		"key":             fmt.Sprintf("../scripts/resources/domain_keys/%s/%s/%s.key", deploy.DomainKeyType, domainName, keySuffix),
+		"key_pub":         fmt.Sprintf("../scripts/resources/domain_keys/%s/%s/%s.pub", deploy.DomainKeyType, domainName, keySuffix),
+		"stabilizing_key": fmt.Sprintf("../scripts/resources/domain_keys/bls12381/%s/%s.key", domainName, keySuffix),
+		"stabilizing_pk":  fmt.Sprintf("../scripts/resources/domain_keys/bls12381/%s/%s.pub", domainName, keySuffix),
 	}
 
-	secretFilesClient := map[string]string{
-		"ca_cert": fmt.Sprintf("../conf/resources/portal/%s/client/ca.crt", deploy.ClientKeyType),
-		"cert":    fmt.Sprintf("../conf/resources/portal/%s/client/client.crt", deploy.ClientKeyType),
-		"key":     fmt.Sprintf("../conf/resources/portal/%s/client/client.key", deploy.ClientKeyType),
-	}
-
+	
 	// Create the final ordered structure directly
 	orderedData := map[string]interface{}{
 		"build_root":       deploy.BuildRoot,
@@ -412,36 +386,28 @@ func generateDomainFile(filename, domainName string, domainConfig DomainConfig, 
 		"chain_protocol":   deploy.ChainProtocol,
 		"domain_label":     domainName,
 		"version":          deploy.Version,
-		"run_user":         deploy.RunUser,
+		"run_user":         "ecs-user",  // Python version uses "ecs-user"
 		"deploy_dir":       deployDir,
-		"genesis_conf":     "../genesis.conf",
+		"genesis_conf":     "../conf/genesis.aldaba-ng.conf",  // Python version uses this path
 		"mygrid":           deploy.Mygrid,
 		"secret": map[string]interface{}{
 			"domain": map[string]interface{}{
 				"key_type": deploy.DomainKeyType,
 				"files":   secretFilesDomain,
 			},
-			"client": map[string]interface{}{
-				"key_type": deploy.ClientKeyType,
-				"files":   secretFilesClient,
-			},
 		},
 		"use_generated_keys":  deploy.UseGeneratedKeys,
-		"enable_dora":         deploy.EnableDora,
+		"enable_setkey_env":   true,  // Default to true when use_generated_keys is true
+		"portal_ssl_pass":     keyPasswd,  // Use keyPasswd as default
+		"running_conf":        "../conf/aldaba.tpl.conf",  // Default from deploy.light.json
 		"key_passwd":          keyPasswd,
 		"docker":              deploy.Docker,
 		"common": map[string]interface{}{
-			"env":    deploy.Common.Env,
-			"log":    deploy.Common.Log,
-			"config": deploy.Common.Config,
-			"gflags": deploy.Common.Gflags,
-			"metrics": map[string]interface{}{
-				"push_address":  "",
-				"push_interval": "",
-				"enable":        false,
-				"push_port":     "",
-				"job_name":      "",
-			},
+			"env":            deploy.Common.Env,
+			"log":            deploy.Common.Log,
+			"config":         deploy.Common.Config,
+			"gflags":         deploy.Common.Gflags,
+			"monitor_config": deploy.Common.MonitorConfig,
 		},
 		"cluster":             cluster,
 		"initial_stake_in_gwei": domainConfig.InitialStakeInGwei,
