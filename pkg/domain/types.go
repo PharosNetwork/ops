@@ -1,19 +1,20 @@
 package domain
 
 type Domain struct {
-	ChainID       string                 `json:"chain_id"`
-	DomainLabel   string                 `json:"domain_label"`
-	DeployDir     string                 `json:"deploy_dir"`
-	BuildRoot     string                 `json:"build_root"`
-	RunUser       string                 `json:"run_user"`
-	ChainProtocol string                 `json:"chain_protocol"`
-	Version       string                 `json:"version"`
-	Cluster       map[string]*Instance    `json:"cluster"`
-	Common        CommonConfig           `json:"common"`
-	Secret        SecretConfig           `json:"secret"`
-	Docker        DockerConfig           `json:"docker"`
-	Mygrid        MygridConfig           `json:"mygrid"`
-	GenesisConf   string                 `json:"genesis_conf"`
+	ChainID           string                 `json:"chain_id"`
+	DomainLabel       string                 `json:"domain_label"`
+	DeployDir         string                 `json:"deploy_dir"`
+	BuildRoot         string                 `json:"build_root"`
+	RunUser           string                 `json:"run_user"`
+	ChainProtocol     string                 `json:"chain_protocol"`
+	Version           string                 `json:"version"`
+	Cluster           map[string]*Instance    `json:"cluster"`
+	Common            CommonConfig           `json:"common"`
+	Secret            SecretConfig           `json:"secret"`
+	Docker            DockerConfig           `json:"docker"`
+	Mygrid            MygridConfig           `json:"mygrid"`
+	GenesisConf       string                 `json:"genesis_conf"`
+	UseGeneratedKeys  bool                   `json:"use_generated_keys"`
 }
 
 type Instance struct {
@@ -30,11 +31,12 @@ type Instance struct {
 }
 
 type CommonConfig struct {
-	Env     map[string]string      `json:"env"`
-	Log     map[string]interface{} `json:"log"`
-	Config  map[string]interface{} `json:"config"`
-	GFlags  map[string]string      `json:"gflags"`
-	Metrics MetricsConfig          `json:"metrics"`
+	Env          map[string]string      `json:"env"`
+	Log          map[string]interface{} `json:"log"`
+	Config       map[string]interface{} `json:"config"`
+	GFlags       map[string]string      `json:"gflags"`
+	Metrics      MetricsConfig          `json:"metrics"`
+	MonitorConfig map[string]interface{} `json:"monitor_config"`
 }
 
 type MetricsConfig struct {

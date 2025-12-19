@@ -100,8 +100,6 @@ var generateCmd = &cobra.Command{
 			deployFile = args[0]
 		}
 
-		genesis, _ := cmd.Flags().GetBool("genesis")
-
 		utils.Info("Generating domain files from: %s", deployFile)
 
 		// Read deploy file
@@ -126,9 +124,9 @@ var generateCmd = &cobra.Command{
 			}
 		}
 
-		if genesis {
-			utils.Info("Genesis flag enabled - would generate genesis files")
-			// TODO: Implement genesis generation
+		// Generate genesis files like Python version
+		if err := generateGenesisFile(deploy); err != nil {
+			utils.Warn("Failed to generate genesis file: %v", err)
 		}
 
 		return nil
@@ -726,6 +724,126 @@ func deepCopySlice(s []interface{}) []interface{} {
 		}
 	}
 	return copy
+}
+
+// generateGenesisFile generates the genesis.aldaba-ng.conf file
+// This matches the Python implementation in conf.py
+func generateGenesisFile(deploy DeployConfig) error {
+	// Determine genesis file path - relative to deploy file
+	genesisFile := filepath.Join("../conf", fmt.Sprintf("genesis.%s.conf", deploy.ChainID))
+
+	// Load genesis template - try template path first, fallback to genesis.conf
+	templatePath := deploy.GenesisTpl
+	if _, err := os.Stat(templatePath); os.IsNotExist(err) {
+		// Fallback to genesis.conf in current directory
+		templatePath = "genesis.conf"
+		if _, err := os.Stat(templatePath); os.IsNotExist(err) {
+			return fmt.Errorf("neither template %s nor fallback genesis.conf found", deploy.GenesisTpl)
+		}
+	}
+
+	// Read template
+	templateData, err := os.ReadFile(templatePath)
+	if err != nil {
+		return fmt.Errorf("failed to read genesis template %s: %w", templatePath, err)
+	}
+
+	// Parse template JSON
+	var genesis map[string]interface{}
+	if err := json.Unmarshal(templateData, &genesis); err != nil {
+		return fmt.Errorf("failed to parse genesis template: %w", err)
+	}
+
+	// Create genesis domains section
+	domains := make(map[string]interface{})
+
+	// Process each domain
+	for domainName, domainConfig := range deploy.Domains {
+		// Get key paths
+		keyDir := filepath.Join(deploy.BuildRoot, "scripts/resources/domain_keys", deploy.DomainKeyType, domainName)
+		blsKeyDir := filepath.Join(deploy.BuildRoot, "scripts/resources/domain_keys/bls12381", domainName)
+
+		// Get public key
+		pubkey, err := getPubkeyFromFile(deploy.DomainKeyType, filepath.Join(keyDir, "new.key"), "123abc")
+		if err != nil {
+			return fmt.Errorf("failed to get public key for %s: %w", domainName, err)
+		}
+		pubkeyHex := hex.EncodeToString(pubkey)
+
+		// Get stabilizing public key (BLS)
+		blsPubkeyFile := filepath.Join(blsKeyDir, "generate.pub")
+		blsPubkeyData, err := os.ReadFile(blsPubkeyFile)
+		if err != nil {
+			return fmt.Errorf("failed to read BLS public key for %s: %w", domainName, err)
+		}
+		blsPubkeyHex := strings.TrimSpace(string(blsPubkeyData))
+
+		// Get node ID (SHA256 of public key)
+		hash := sha256.Sum256(pubkey)
+		nodeID := fmt.Sprintf("%x", hash)
+
+		// Calculate stake in WEI (Python hardcodes this to 200000000)
+		stakeWei := int64(200000000)
+
+		// Build endpoints from cluster configuration
+		var endpoints []string
+		for _, cluster := range domainConfig.Cluster {
+			endpoint := fmt.Sprintf("tcp://%s:%d", cluster.Host, domainConfig.DomainPort)
+			endpoints = append(endpoints, endpoint)
+		}
+
+		// Create domain entry (Python uses hardcoded values for some fields)
+		domainEntry := map[string]interface{}{
+			"pubkey":              "0x" + pubkeyHex,
+			"stabilizing_pubkey":  "0x" + blsPubkeyHex,
+			"owner":               "root",  // Python hardcodes as "root"
+			"endpoints":           endpoints,
+			"commission_rate":     "10",    // Python hardcodes as "10"
+			"staking":             stakeWei,
+			"node_id":             nodeID,
+		}
+
+		domains[domainName] = domainEntry
+	}
+
+	// Update genesis with domain information
+	genesis["domains"] = domains
+
+	// Write genesis file
+	genesisData, err := json.MarshalIndent(genesis, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal genesis data: %w", err)
+	}
+
+	// Create conf directory if it doesn't exist
+	confDir := filepath.Dir(genesisFile)
+	if err := os.MkdirAll(confDir, 0755); err != nil {
+		return fmt.Errorf("failed to create conf directory: %w", err)
+	}
+
+	if err := os.WriteFile(genesisFile, genesisData, 0644); err != nil {
+		return fmt.Errorf("failed to write genesis file: %w", err)
+	}
+
+	// Replace admin address like Python does
+	if deploy.AdminAddr != "" {
+		// Read file content
+		content, err := os.ReadFile(genesisFile)
+		if err != nil {
+			return fmt.Errorf("failed to read genesis file for admin replacement: %w", err)
+		}
+
+		// Replace default admin address with configured one
+		contentStr := string(content)
+		contentStr = strings.ReplaceAll(contentStr, "2cc298bdee7cfeac9b49f9659e2f3d637e149696", deploy.AdminAddr[2:])
+
+		if err := os.WriteFile(genesisFile, []byte(contentStr), 0644); err != nil {
+			return fmt.Errorf("failed to write updated genesis file: %w", err)
+		}
+	}
+
+	utils.Info("Generated genesis file: %s", genesisFile)
+	return nil
 }
 
 func init() {

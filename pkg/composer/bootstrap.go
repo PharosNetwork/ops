@@ -887,12 +887,12 @@ func (c *Composer) getBinaryName(service string) string {
 	binaryMap := map[string]string{
 		domain.ServiceETCD:       "etcd",
 		domain.ServiceStorage:    "mygrid_service",
-		domain.ServicePortal:     "pharos",
-		domain.ServiceDog:        "pharos",
-		domain.ServiceTxPool:     "pharos",
-		domain.ServiceController: "pharos",
-		domain.ServiceCompute:    "pharos",
-		domain.ServiceLight:      "pharos_light",
+		domain.ServicePortal:     "aldaba",
+		domain.ServiceDog:        "aldaba",
+		domain.ServiceTxPool:     "aldaba",
+		domain.ServiceController: "aldaba",
+		domain.ServiceCompute:    "aldaba",
+		domain.ServiceLight:      "aldaba_light",
 	}
 
 	if binary, exists := binaryMap[service]; exists {

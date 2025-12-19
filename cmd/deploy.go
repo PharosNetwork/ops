@@ -2,9 +2,9 @@ package cmd
 
 import (
 	"fmt"
+	"sync"
 
 	"pharos-ops/pkg/composer"
-	"pharos-ops/pkg/utils"
 
 	"github.com/spf13/cobra"
 )
@@ -18,12 +18,14 @@ Multiple domain files can be specified for multi-domain deployment.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		service, _ := cmd.Flags().GetString("service")
 
-		utils.Info("Deploying with service: %s", service)
+		// Print domain files like Python version
+		for _, domainFile := range args {
+			fmt.Printf("%s\n", domainFile)
+		}
 
 		if len(args) == 1 {
 			// Single domain deployment
 			domainFile := args[0]
-			utils.Info("Deploying single domain: %s", domainFile)
 
 			c, err := composer.New(domainFile)
 			if err != nil {
@@ -32,23 +34,35 @@ Multiple domain files can be specified for multi-domain deployment.`,
 
 			return c.Deploy(service)
 		} else {
-			// Multi-domain deployment
-			utils.Info("Deploying %d domains", len(args))
+			// Multi-domain deployment - concurrent like Python version
+			var wg sync.WaitGroup
+			errChan := make(chan error, len(args))
 
-			// TODO: Implement concurrent deployment like Python version
-			// For now, deploy sequentially
 			for _, domainFile := range args {
-				utils.Info("Deploying domain: %s", domainFile)
+				wg.Add(1)
+				go func(df string) {
+					defer wg.Done()
 
-				c, err := composer.New(domainFile)
+					c, err := composer.New(df)
+					if err != nil {
+						errChan <- fmt.Errorf("failed to load domain file %s: %w", df, err)
+						return
+					}
+
+					if err := c.Deploy(service); err != nil {
+						errChan <- fmt.Errorf("failed to deploy domain %s: %w", df, err)
+						return
+					}
+				}(domainFile)
+			}
+
+			wg.Wait()
+			close(errChan)
+
+			// Return first error if any
+			for err := range errChan {
 				if err != nil {
-					utils.Error("Failed to load domain file %s: %v", domainFile, err)
-					continue
-				}
-
-				if err := c.Deploy(service); err != nil {
-					utils.Error("Failed to deploy domain %s: %v", domainFile, err)
-					continue
+					return err
 				}
 			}
 		}

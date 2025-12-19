@@ -446,3 +446,20 @@ func getSSHAgentAuth() (ssh.AuthMethod, error) {
 
 	return ssh.PublicKeysCallback(agentClient.Signers), nil
 }
+
+// GetHost returns the host address
+func (c *Client) GetHost() string {
+	return c.host
+}
+
+// UploadFileContent uploads content to a file on remote host
+func (c *Client) UploadFileContent(remotePath, content string) error {
+	if c.client == nil {
+		return fmt.Errorf("not connected to remote host")
+	}
+
+	// Use cat with heredoc to write content
+	cmd := fmt.Sprintf("cat > %s << 'EOF'\n%s\nEOF", remotePath, content)
+	_, err := c.RunCommand(cmd)
+	return err
+}
