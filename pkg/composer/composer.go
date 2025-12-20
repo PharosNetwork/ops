@@ -118,26 +118,11 @@ func New(domainFile string) (*ComposerRefactor, error) {
 	return c, nil
 }
 
-// Status 获取服务状态
-// TODO: 参考Python版本实现
-func (c *ComposerRefactor) Status(service string) error {
-	utils.Info("Status not yet implemented for domain: %s, service: %s", c.domain.DomainLabel, service)
-	return nil
-}
+// Status is implemented in status.go
 
-// Start 启动服务
-// TODO: 参考Python版本实现
-func (c *ComposerRefactor) Start(service string, extraArgs string) error {
-	utils.Info("Start not yet implemented for domain: %s, service: %s, extraArgs: %s", c.domain.DomainLabel, service, extraArgs)
-	return nil
-}
+// Start is implemented in start.go
 
-// Stop 停止服务
-// TODO: 参考Python版本实现
-func (c *ComposerRefactor) Stop(service string) error {
-	utils.Info("Stop not yet implemented for domain: %s, service: %s", c.domain.DomainLabel, service)
-	return nil
-}
+// Stop is implemented in stop.go
 
 
 

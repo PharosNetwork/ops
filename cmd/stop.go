@@ -10,6 +10,7 @@ import (
 
 var (
 	stopService string
+	stopForce   bool
 )
 
 var stopCmd = &cobra.Command{
@@ -27,7 +28,7 @@ var stopCmd = &cobra.Command{
 				continue
 			}
 
-			if err := c.Stop(stopService); err != nil {
+			if err := c.Stop(stopService, stopForce); err != nil {
 				utils.Error("Failed to stop domain %s: %v", domainFile, err)
 				continue
 			}
@@ -43,4 +44,6 @@ func init() {
 	// Add flags matching Python version
 	stopCmd.Flags().StringVarP(&stopService, "service", "s", "",
 		"service [etcd|mygrid_service|portal|dog|txpool|controller|compute]]")
+	stopCmd.Flags().BoolVarP(&stopForce, "force", "f", false,
+		"Force stop")
 }

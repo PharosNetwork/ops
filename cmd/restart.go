@@ -23,7 +23,7 @@ var restartCmd = &cobra.Command{
 		}
 		
 		// Stop first
-		if err := c.Stop(""); err != nil {
+		if err := c.Stop("", false); err != nil {
 			utils.Error("Failed to stop node: %v", err)
 		}
 		

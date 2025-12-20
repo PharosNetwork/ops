@@ -15,6 +15,9 @@ type Domain struct {
 	Mygrid            MygridConfig           `json:"mygrid"`
 	GenesisConf       string                 `json:"genesis_conf"`
 	UseGeneratedKeys  bool                   `json:"use_generated_keys"`
+	KeyPasswd         string                 `json:"key_passwd"`
+	PortalSslPass     string                 `json:"portal_ssl_pass"`
+	EnableSetkeyEnv   bool                   `json:"enable_setkey_env"`
 }
 
 type Instance struct {
