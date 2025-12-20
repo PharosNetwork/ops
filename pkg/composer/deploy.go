@@ -291,7 +291,7 @@ func (c *ComposerRefactor) deployHostConf(sshClient *ssh.Client, service string)
 					startup["init_config"] = c.cliConf
 
 					// 设置环境变量
-					if params, ok := startup["parameters"].(map[string]string); ok {
+					if params, ok := startup["parameters"].(map[string]interface{}); ok {
 						for k, v := range inst.Env {
 							params["/SetEnv/"+k] = v
 						}
@@ -321,6 +321,14 @@ func (c *ComposerRefactor) deployHostConf(sshClient *ssh.Client, service string)
 		// 4. 配置Cubenet（DOG和LIGHT服务）
 		if inst.Service == domain.ServiceDog || inst.Service == domain.ServiceLight {
 			if nodeID, exists := inst.Env["NODE_ID"]; exists {
+				// 更新顶级secret_config
+				if aldaba, ok := c.aldabaConf["aldaba"].(map[string]interface{}); ok {
+					if secret, ok := aldaba["secret_config"].(map[string]interface{}); ok {
+						secret["domain_key"] = c.toBase64(c.domain.Secret.Domain.Files["key"])
+						secret["stabilizing_key"] = c.toBase64(c.domain.Secret.Domain.Files["stabilizing_key"])
+					}
+				}
+
 				if aldaba, ok := c.aldabaConf["aldaba"].(map[string]interface{}); ok {
 					if startup, ok := aldaba["startup_config"].(map[string]interface{}); ok {
 						if secret, ok := startup["secret_config"].(map[string]interface{}); ok {
@@ -404,6 +412,11 @@ func (c *ComposerRefactor) deployHostConf(sshClient *ssh.Client, service string)
 		// 上传配置文件
 		if err := sshClient.UploadFileContent(aldabaConfFile, string(aldabaConfData)); err != nil {
 			return fmt.Errorf("failed to upload aldaba.conf: %w", err)
+		}
+
+		// 设置文件权限为600（与Python一致）
+		if inst.Service == domain.ServiceLight {
+			_, _ = sshClient.RunCommand(fmt.Sprintf("chmod 600 %s", aldabaConfFile))
 		}
 
 		// 6. 环境配置文件 - Python版本不生成env.json，跳过
@@ -560,27 +573,53 @@ func (c *ComposerRefactor) deployLocalCLI() error {
 	// mygrid_genesis.conf
 	mygridGenesisFile := filepath.Join(cliBinDir, MygridGenesisFilename)
 	if data, err := json.MarshalIndent(c.mygridClientConf, "", "  "); err == nil {
-		os.WriteFile(mygridGenesisFile, data, 0644)
+		os.WriteFile(mygridGenesisFile, data, 0666)
 	}
 
 	// meta_service.conf
 	metaServiceFile := filepath.Join(cliBinDir, MetaServiceFilename)
 	if data, err := json.MarshalIndent(c.metaConf, "", "  "); err == nil {
-		os.WriteFile(metaServiceFile, data, 0644)
+		os.WriteFile(metaServiceFile, data, 0666)
 	}
 
 	// aldaba.conf
 	aldabaConfFile := filepath.Join(cliConfDir, "aldaba.conf")
-	// Debug: Check enable_persist_trace in deployLocalClientConf
-	if aldaba, ok := c.aldabaConf["aldaba"].(map[string]interface{}); ok {
-		if startup, ok := aldaba["startup_config"].(map[string]interface{}); ok {
-			if params, ok := startup["parameters"].(map[string]string); ok {
-				fmt.Printf("DEBUG: deployLocalClientConf, enable_persist_trace = %s\n", params["/GlobalFlag/enable_persist_trace"])
+
+	// Add instance environment variables to aldaba configuration (matching Python behavior)
+	if inst, exists := c.domain.Cluster[lightInstance]; exists {
+		if aldaba, ok := c.aldabaConf["aldaba"].(map[string]interface{}); ok {
+			if startup, ok := aldaba["startup_config"].(map[string]interface{}); ok {
+				// Get or create parameters map
+				var parameters map[string]interface{}
+				if params, ok := startup["parameters"].(map[string]interface{}); ok {
+					parameters = params
+				} else {
+					parameters = make(map[string]interface{})
+					startup["parameters"] = parameters
+				}
+
+				// Add instance environment variables
+				for k, v := range inst.Env {
+					parameters["/SetEnv/"+k] = v
+				}
+
+				// Add common environment variables
+				if c.domain.Common.Env != nil {
+					for k, v := range c.domain.Common.Env {
+						parameters["/SetEnv/"+k] = v
+					}
+				}
+
+				// Add standard environment variables
+				parameters["/SetEnv/CHAIN_ID"] = c.domain.ChainID
+				parameters["/SetEnv/DOMAIN_LABEL"] = c.domain.DomainLabel
+				parameters["/SetEnv/SERVICE"] = inst.Service
 			}
 		}
 	}
+
 	if data, err := json.MarshalIndent(c.aldabaConf, "", "  "); err == nil {
-		os.WriteFile(aldabaConfFile, data, 0644)
+		os.WriteFile(aldabaConfFile, data, 0666)
 	}
 
 	return nil

@@ -732,14 +732,14 @@ func generateGenesisFile(deploy DeployConfig) error {
 	// Determine genesis file path - relative to deploy file
 	genesisFile := filepath.Join("../conf", fmt.Sprintf("genesis.%s.conf", deploy.ChainID))
 
-	// Load genesis template - try template path first, fallback to genesis.conf
+	// Load genesis template - should be relative to deploy file location
 	templatePath := deploy.GenesisTpl
+	utils.Info("Looking for genesis template at: %s", templatePath)
+
+	// Check if template exists
 	if _, err := os.Stat(templatePath); os.IsNotExist(err) {
-		// Fallback to genesis.conf in current directory
-		templatePath = "genesis.conf"
-		if _, err := os.Stat(templatePath); os.IsNotExist(err) {
-			return fmt.Errorf("neither template %s nor fallback genesis.conf found", deploy.GenesisTpl)
-		}
+		// In Python, there's no fallback - just return error
+		return fmt.Errorf("genesis template file not found: %s", templatePath)
 	}
 
 	// Read template
@@ -748,10 +748,21 @@ func generateGenesisFile(deploy DeployConfig) error {
 		return fmt.Errorf("failed to read genesis template %s: %w", templatePath, err)
 	}
 
+	utils.Info("Template file size: %d bytes", len(templateData))
+
 	// Parse template JSON
 	var genesis map[string]interface{}
 	if err := json.Unmarshal(templateData, &genesis); err != nil {
 		return fmt.Errorf("failed to parse genesis template: %w", err)
+	}
+
+	// Check if alloc exists
+	if _, ok := genesis["alloc"]; ok {
+		if allocMap, ok := genesis["alloc"].(map[string]interface{}); ok {
+			utils.Info("Template alloc section has %d entries", len(allocMap))
+		}
+	} else {
+		utils.Warn("Template has no alloc section!")
 	}
 
 	// Create genesis domains section
@@ -815,6 +826,8 @@ func generateGenesisFile(deploy DeployConfig) error {
 		return fmt.Errorf("failed to marshal genesis data: %w", err)
 	}
 
+	utils.Info("Marshalled genesis data size: %d bytes", len(genesisData))
+
 	// Create conf directory if it doesn't exist
 	confDir := filepath.Dir(genesisFile)
 	if err := os.MkdirAll(confDir, 0755); err != nil {
@@ -823,6 +836,11 @@ func generateGenesisFile(deploy DeployConfig) error {
 
 	if err := os.WriteFile(genesisFile, genesisData, 0644); err != nil {
 		return fmt.Errorf("failed to write genesis file: %w", err)
+	}
+
+	// Verify written file size
+	if writtenData, err := os.ReadFile(genesisFile); err == nil {
+		utils.Info("Written genesis file size: %d bytes", len(writtenData))
 	}
 
 	// Replace admin address like Python does

@@ -13,8 +13,6 @@ const CLIJSON = `{
 		"endpoints": []
 	},
 	"data_path": "",
-	"mygrid_env_path": "../conf/mygrid.env.json",
-	"mygrid_conf_path": "../conf/mygrid.conf.json",
 	"mygrid_client_id": "",
 	"service_name": "",
 	"mygrid_client_deploy_mode": ""

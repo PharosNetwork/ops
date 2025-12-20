@@ -353,8 +353,24 @@ func generateDomain(deployFilePath string) (*types.Domain, error) {
 		ins.Args = []string{"-d"}
 		ins.Env["LIGHT_RPC_LISTEN_URL"] = fmt.Sprintf("%v:%v", v.Cluster[0].Host, v.Cluster[0].StartPort)
 		ins.Env["LIGHT_RPC_ADVERTISE_URL"] = fmt.Sprintf("%v:%v", v.Cluster[0].Host, v.Cluster[0].StartPort)
-		ins.Env["CLIENT_ADVERTISE_URLS"] = fmt.Sprintf("tls://%v:%v,http://%v:%v,ws://%v:%v,wss://%v:%v", v.Cluster[0].Host, v.ClientTcpPort, v.Cluster[0].Host, v.ClientHttpPort, v.Cluster[0].Host, v.ClientWsPort, v.Cluster[0].Host, v.ClientWssPort)
-		ins.Env["CLIENT_LISTEN_URLS"] = fmt.Sprintf("tls://%v:%v,http://%v:%v,ws://%v:%v,wss://%v:%v", v.Cluster[0].Host, v.ClientTcpPort, v.Cluster[0].Host, v.ClientHttpPort, v.Cluster[0].Host, v.ClientWsPort, v.Cluster[0].Host, v.ClientWssPort)
+		// Only include HTTP and WebSocket URLs to match Python implementation
+		var clientUrls []string
+		var clientListenUrls []string
+
+		// Add HTTP URL
+		if v.ClientHttpPort > 0 {
+			clientUrls = append(clientUrls, fmt.Sprintf("http://%v:%v", v.Cluster[0].Host, v.ClientHttpPort))
+			clientListenUrls = append(clientListenUrls, fmt.Sprintf("http://0.0.0.0:%v", v.ClientHttpPort))
+		}
+
+		// Add WebSocket URL
+		if v.ClientWsPort > 0 {
+			clientUrls = append(clientUrls, fmt.Sprintf("ws://%v:%v", v.Cluster[0].Host, v.ClientWsPort))
+			clientListenUrls = append(clientListenUrls, fmt.Sprintf("ws://0.0.0.0:%v", v.ClientWsPort))
+		}
+
+		ins.Env["CLIENT_ADVERTISE_URLS"] = strings.Join(clientUrls, ",")
+		ins.Env["CLIENT_LISTEN_URLS"] = strings.Join(clientListenUrls, ",")
 		ins.Env["PORTAL_UUID"] = "100"
 		ins.Env["DOMAIN_LISTEN_URLS0"] = fmt.Sprintf("tcp://%v,%v", v.Cluster[0].Host, v.DomainPort)
 		ins.Env["DOMAIN_LISTEN_URLS1"] = fmt.Sprintf("tcp://%v,%v", v.Cluster[0].Host, v.DomainPort+1)
