@@ -62,10 +62,10 @@ func (c *Composer) bootstrapLight() error {
 
 	utils.Info("Starting generate genesis state")
 
-	// Initialize configuration
-	if err := c.initializeConf(sshClient); err != nil {
-		return fmt.Errorf("failed to initialize configuration: %w", err)
-	}
+	// Initialize configuration (commented out to match Python - Python doesn't use initialize_conf)
+	// if err := c.initializeConf(sshClient); err != nil {
+	// 	return fmt.Errorf("failed to initialize configuration: %w", err)
+	// }
 
 	// Generate genesis state
 	if err := c.generateGenesis(sshClient); err != nil {
@@ -128,10 +128,10 @@ func (c *Composer) bootstrapUltra() error {
 		return fmt.Errorf("failed to connect to %s: %w", controllerInst.IP, err)
 	}
 
-	// 6. Initialize configuration
-	if err := c.initializeConf(sshClient); err != nil {
-		return fmt.Errorf("failed to initialize configuration: %w", err)
-	}
+	// 6. Initialize configuration (commented out to match Python - Python doesn't use initialize_conf)
+	// if err := c.initializeConf(sshClient); err != nil {
+	// 	return fmt.Errorf("failed to initialize configuration: %w", err)
+	// }
 
 	// 7. Generate genesis state
 	if err := c.generateGenesis(sshClient); err != nil {
@@ -240,8 +240,8 @@ func (c *Composer) generateGenesis(sshClient *ssh.Client) error {
 	cliBinDir := filepath.Join(c.getRemoteClientDir(), "bin")
 
 	// Build the command matching Python exactly
-	// Python: cd {cli_bin_dir}; LD_PRELOAD=./{EVMONE_SO} ./pharos_cli genesis -g ../conf/genesis.conf -s {MYGRID_GENESIS_CONFIG_FILENAME}
-	cmd := fmt.Sprintf("cd %s; LD_PRELOAD=./%s ./pharos_cli genesis -g ../conf/genesis.conf -s %s",
+	// Python: cd {cli_bin_dir}; LD_PRELOAD=./{EVMONE_SO} ./aldaba_cli genesis -g ../conf/genesis.conf -s {MYGRID_GENESIS_CONFIG_FILENAME}
+	cmd := fmt.Sprintf("cd %s; LD_PRELOAD=./%s ./aldaba_cli genesis -g ../conf/genesis.conf -s %s",
 		cliBinDir, EVMONE_SO, MYGRID_GENESIS_CONFIG_FILENAME)
 
 	utils.Info("Running genesis command: %s", cmd)
