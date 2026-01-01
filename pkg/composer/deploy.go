@@ -262,8 +262,13 @@ func (c *ComposerRefactor) deployHostConf(sshClient *ssh.Client, service string)
 		c.cliConf["service_name"] = inst.Service
 		c.cliConf["chain_id"] = c.domain.ChainID
 		c.cliConf["domain_id"] = c.domain.DomainLabel
-		// 设置data_path为light实例的data目录
-		c.cliConf["data_path"] = filepath.Join(c.deployDir, inst.Name, "data")
+		// 设置data_path（使用metasvc_path，与Python一致）
+		// Python: self._cli_conf['data_path'] = f'{metasvc_path}'
+		metasvcPath := c.getMetasvcPath()
+		if metasvcPath == "" {
+			metasvcPath = filepath.Join(c.deployDir, inst.Name, "data")
+		}
+		c.cliConf["data_path"] = metasvcPath
 		if c.isLight {
 			c.cliConf["mygrid_client_deploy_mode"] = "light"
 		} else {
@@ -374,17 +379,15 @@ func (c *ComposerRefactor) deployHostConf(sshClient *ssh.Client, service string)
 							}
 
 							// 处理dog服务的密钥文件
+							// Python: target_key_file = key_file if use_generated_keys else 'generate.key'
+							// 目标文件名始终是 generate.key（与Python一致）
 							if inst.Service == domain.ServiceDog {
 								keyFile := "generate" + PrivateKeySuffix
 								if !c.domain.UseGeneratedKeys {
 									keyFile = "new" + PrivateKeySuffix
 								}
-								targetKeyFile := keyFile
-								if c.domain.UseGeneratedKeys {
-									targetKeyFile = "generate" + PrivateKeySuffix
-								} else {
-									targetKeyFile = "new" + PrivateKeySuffix
-								}
+								// 目标文件名始终是 generate.key
+								targetKeyFile := "generate" + PrivateKeySuffix
 
 								srcKey := filepath.Join(c.buildRoot, "scripts", "resources", "domain_keys",
 									"prime256v1", c.domain.DomainLabel, keyFile)
@@ -438,7 +441,9 @@ func (c *ComposerRefactor) deployHostConf(sshClient *ssh.Client, service string)
 				{fmt.Sprintf("%s/%s/generate%s", DomainKeysBlsPath, c.domain.DomainLabel, PopSuffix), "generate_bls" + PopSuffix},
 			}
 
-			// 根据use_generated_keys调整文件名
+			// 根据use_generated_keys调整源文件名（目标文件名始终是generate.*，与Python一致）
+			// Python: target_key_file = key_file if use_generated_keys else 'generate.key'
+			// 这意味着目标文件名始终是 generate.* 形式
 			if !c.domain.UseGeneratedKeys {
 				prefix := "new"
 				keyFiles[0].srcPattern = fmt.Sprintf("%s/%s/%s%s", DomainKeysPrimePath, c.domain.DomainLabel, prefix, PrivateKeySuffix)
@@ -447,12 +452,7 @@ func (c *ComposerRefactor) deployHostConf(sshClient *ssh.Client, service string)
 				keyFiles[3].srcPattern = fmt.Sprintf("%s/%s/%s%s", DomainKeysBlsPath, c.domain.DomainLabel, prefix, PrivateKeySuffix)
 				keyFiles[4].srcPattern = fmt.Sprintf("%s/%s/%s%s", DomainKeysBlsPath, c.domain.DomainLabel, prefix, PublicKeySuffix)
 				keyFiles[5].srcPattern = fmt.Sprintf("%s/%s/%s%s", DomainKeysBlsPath, c.domain.DomainLabel, prefix, PopSuffix)
-				keyFiles[0].dstName = "new" + PrivateKeySuffix
-				keyFiles[1].dstName = "new" + PublicKeySuffix
-				keyFiles[2].dstName = "new" + PopSuffix
-				keyFiles[3].dstName = "new_bls" + PrivateKeySuffix
-				keyFiles[4].dstName = "new_bls" + PublicKeySuffix
-				keyFiles[5].dstName = "new_bls" + PopSuffix
+				// 注意：不修改 dstName，目标文件名始终保持 generate.* 形式
 			}
 
 			for _, kf := range keyFiles {
@@ -564,9 +564,15 @@ func (c *ComposerRefactor) deployLocalCLI() error {
 		}
 	}
 
-	// 设置data_path
+	// 设置data_path（使用metasvc_path，与Python一致）
+	// Python: metasvc_path = f"{self._aldaba_conf.storage.mygrid_env['mygrid_env']['meta_store_disk']}/{self._aldaba_conf.storage.mygrid_env['mygrid_env']['project_data_path']}"
+	metasvcPath := c.getMetasvcPath()
+	if metasvcPath == "" {
+		// 如果无法从配置获取，回退到默认路径
+		metasvcPath = filepath.Join(c.deployDir, lightInstance, "data")
+	}
 	if metaService, ok := c.metaConf["meta_service"].(map[string]interface{}); ok {
-		metaService["data_path"] = filepath.Join(c.deployDir, lightInstance, "data")
+		metaService["data_path"] = metasvcPath
 	}
 
 	// 6. 生成客户端配置文件

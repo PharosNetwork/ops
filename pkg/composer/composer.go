@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"pharos-ops/pkg/domain"
 	"pharos-ops/pkg/utils"
@@ -104,6 +105,9 @@ func New(domainFile string) (*ComposerRefactor, error) {
 		return nil, fmt.Errorf("failed to init config templates: %w", err)
 	}
 
+	// 应用mygrid自适应配置（与Python一致）
+	c.applyMygridAdaptiveConfig()
+
 	// 首先应用domain.common中的配置（确保gflags被正确设置）
 	c.updateAldabaConfByDomain()
 
@@ -130,15 +134,28 @@ func New(domainFile string) (*ComposerRefactor, error) {
 
 // initConfigTemplates 初始化配置模板
 func (c *ComposerRefactor) initConfigTemplates() error {
-	// 加载aldaba.tpl.conf模板（从running_conf配置）
-	aldabaConfPath := filepath.Join(c.domainPath, "../conf/aldaba.tpl.conf")
+	// 加载aldaba.tpl.conf模板（使用domain.running_conf，与Python一致）
+	// Python: self._aldaba_conf_data = utils.load_json(self._domain.running_conf)
+	var aldabaConfPath string
+	if c.domain.RunningConf != "" {
+		// 如果是相对路径，相对于domainPath计算
+		if !filepath.IsAbs(c.domain.RunningConf) {
+			aldabaConfPath = filepath.Join(c.domainPath, c.domain.RunningConf)
+		} else {
+			aldabaConfPath = c.domain.RunningConf
+		}
+	} else {
+		// 默认路径
+		aldabaConfPath = filepath.Join(c.domainPath, "../conf/aldaba.tpl.conf")
+	}
+
 	if data, err := os.ReadFile(aldabaConfPath); err == nil {
 		if err := json.Unmarshal(data, &c.aldabaConf); err != nil {
 			return fmt.Errorf("failed to parse aldaba.tpl.conf: %w", err)
 		}
 	} else {
 		// 文件不存在时返回错误，与Python版本保持一致
-		return fmt.Errorf("failed to read aldaba.tpl.conf: %w", err)
+		return fmt.Errorf("failed to read aldaba.tpl.conf from %s: %w", aldabaConfPath, err)
 	}
 
 	// 加载CLI JSON模板
@@ -155,6 +172,86 @@ func (c *ComposerRefactor) initConfigTemplates() error {
 	return nil
 }
 
+// applyMygridAdaptiveConfig 应用mygrid自适应配置（与Python一致）
+// Python: if self._domain.mygrid.env.enable_adaptive:
+//
+//	self._aldaba_conf.storage.mygrid_env["mygrid_env"]["meta_store_disk"] = self.deploy_top_dir
+//	self._aldaba_conf.storage.mygrid_env["mygrid_env"]["flat_kvdb_disk"] = self.deploy_top_dir
+//	self._aldaba_conf.storage.mygrid_env["mygrid_env"]["project_data_path"] = self.meta_svc_dir
+func (c *ComposerRefactor) applyMygridAdaptiveConfig() {
+	if !c.domain.Mygrid.Env.EnableAdaptive {
+		return
+	}
+
+	// Python:
+	// deploy_top_dir, meta_svc_dir = os.path.split(deploy_dir)
+	// deploy_top_dir, sub_dir_path = os.path.split(deploy_top_dir)
+	// meta_svc_dir = os.path.join(sub_dir_path, meta_svc_dir)
+	// e.g., /data/pharos-node/domain0 -> deploy_top_dir=/data, meta_svc_dir=pharos-node/domain0
+	parent, dirName := filepath.Split(filepath.Clean(c.deployDir))
+	deployTopDir, subDirPath := filepath.Split(filepath.Clean(parent))
+	deployTopDir = filepath.Clean(deployTopDir)
+	metaSvcDir := filepath.Join(subDirPath, dirName)
+
+	// 根据模式调整 meta_svc_dir
+	// Python:
+	// if self._is_light:
+	//     self.meta_svc_dir = f'{self.meta_svc_dir}/light/data'
+	// else:
+	//     self.meta_svc_dir = f'{self.meta_svc_dir}/data'
+	if c.isLight {
+		metaSvcDir = filepath.Join(metaSvcDir, "light", "data")
+	} else {
+		metaSvcDir = filepath.Join(metaSvcDir, "data")
+	}
+
+	// 更新 aldaba_conf.storage.mygrid_env.mygrid_env
+	storage, ok := c.aldabaConf["storage"].(map[string]interface{})
+	if !ok {
+		storage = make(map[string]interface{})
+		c.aldabaConf["storage"] = storage
+	}
+
+	mygridEnvOuter, ok := storage["mygrid_env"].(map[string]interface{})
+	if !ok {
+		mygridEnvOuter = make(map[string]interface{})
+		storage["mygrid_env"] = mygridEnvOuter
+	}
+
+	mygridEnv, ok := mygridEnvOuter["mygrid_env"].(map[string]interface{})
+	if !ok {
+		mygridEnv = make(map[string]interface{})
+		mygridEnvOuter["mygrid_env"] = mygridEnv
+	}
+
+	// 设置自适应配置
+	mygridEnv["meta_store_disk"] = deployTopDir
+	mygridEnv["flat_kvdb_disk"] = deployTopDir
+	mygridEnv["project_data_path"] = metaSvcDir
+
+	// 设置 placements
+	var placements []map[string]interface{}
+	if c.isLight {
+		placements = []map[string]interface{}{
+			{
+				"default": deployTopDir,
+				"tier_0":  deployTopDir,
+			},
+		}
+	} else {
+		placements = []map[string]interface{}{
+			{
+				"server_idxs": []int{0},
+				"default":     deployTopDir,
+				"tier_0":      deployTopDir,
+			},
+		}
+	}
+	mygridEnv["placements"] = placements
+
+	utils.Debug("Applied mygrid adaptive config: deploy_top_dir=%s, meta_svc_dir=%s", deployTopDir, metaSvcDir)
+}
+
 // needsEVM 检查是否需要EVM支持
 func (c *ComposerRefactor) needsEVM() bool {
 	for _, protocol := range DefaultChainProtocols {
@@ -169,6 +266,11 @@ func (c *ComposerRefactor) needsEVM() bool {
 func (c *ComposerRefactor) parseInstances() {
 	c.allInstances = make(map[string][]*domain.Instance)
 
+	// 用于生成etcd token, 所有etcd实例共享（与Python一致）
+	// Python: datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+	now := time.Now()
+	ts := fmt.Sprintf("%s_%06d", now.Format("20060102_150405"), now.Nanosecond()/1000)
+
 	for name, inst := range c.domain.Cluster {
 		// 设置实例名称（优先使用map中的key）
 		if inst.Name == "" {
@@ -182,6 +284,14 @@ func (c *ComposerRefactor) parseInstances() {
 		}
 		if host == "" {
 			host = "127.0.0.1"
+		}
+
+		// 生成 ETCD_INITIAL_CLUSTER_TOKEN（与Python一致）
+		if inst.Service == domain.ServiceETCD {
+			if inst.Env == nil {
+				inst.Env = make(map[string]string)
+			}
+			inst.Env["ETCD_INITIAL_CLUSTER_TOKEN"] = fmt.Sprintf("etcd_token_%s_%s", c.domain.DomainLabel, ts)
 		}
 
 		// 按主机分组
@@ -253,8 +363,8 @@ func (c *ComposerRefactor) loadGlobalConfig() error {
 func (c *ComposerRefactor) updateAldabaConfByDomain() {
 	if aldaba, ok := c.aldabaConf["aldaba"].(map[string]interface{}); ok {
 		if startup, ok := aldaba["startup_config"].(map[string]interface{}); ok {
-			// 应用env配置
-			if parameters, ok := startup["parameters"].(map[string]string); ok {
+			// 应用env配置（使用map[string]interface{}，与JSON解析一致）
+			if parameters, ok := startup["parameters"].(map[string]interface{}); ok {
 				for k, v := range c.domain.Common.Env {
 					parameters["/SetEnv/"+k] = v
 				}

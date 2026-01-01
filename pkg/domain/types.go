@@ -14,6 +14,7 @@ type Domain struct {
 	Docker            DockerConfig           `json:"docker"`
 	Mygrid            MygridConfig           `json:"mygrid"`
 	GenesisConf       string                 `json:"genesis_conf"`
+	RunningConf       string                 `json:"running_conf"`
 	UseGeneratedKeys  bool                   `json:"use_generated_keys"`
 	KeyPasswd         string                 `json:"key_passwd"`
 	PortalSslPass     string                 `json:"portal_ssl_pass"`

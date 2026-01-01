@@ -73,12 +73,11 @@ func (c *ComposerRefactor) Start(service string, extraArgs string) error {
 			utils.Error("Light mode only has light instance")
 			return fmt.Errorf("light mode only supports light service")
 		}
-		return c.startServiceForStart(ServiceLight)
-	}
-
-	// Ultra mode
-	if service == "" {
-		// Start all services in order
+		if err := c.startServiceForStart(ServiceLight); err != nil {
+			return err
+		}
+	} else if service == "" {
+		// Ultra mode - start all services in order
 		for _, s := range SERVICES {
 			if err := c.startServiceForStart(s); err != nil {
 				return err
@@ -91,7 +90,7 @@ func (c *ComposerRefactor) Start(service string, extraArgs string) error {
 		}
 	}
 
-	// Show status after starting
+	// Show status after starting (matching Python behavior)
 	return c.Status(service)
 }
 
@@ -206,13 +205,8 @@ func (c *ComposerRefactor) prepareEnvironmentVariables(instance *domain.Instance
 	}
 
 	// Check if enable_setkey_env is enabled
-	// This should be read from domain configuration
-	var enableSetkeyEnv bool
-	if c.domain.KeyPasswd != "" {
-		enableSetkeyEnv = true
-	}
-
-	if enableSetkeyEnv {
+	// Python: if self._domain.enable_setkey_env:
+	if c.domain.EnableSetkeyEnv {
 		// Auto-set environment variables
 		envPrefix := fmt.Sprintf(
 			"export CONSENSUS_KEY_PWD='%s'; export PORTAL_SSL_PWD='%s'; export ASAN_OPTIONS='%s';",
@@ -226,6 +220,7 @@ func (c *ComposerRefactor) prepareEnvironmentVariables(instance *domain.Instance
 	}
 
 	// Manual environment variable verification
+	// Python: env_vars_to_check = ['CONSENSUS_KEY_PWD', 'PORTAL_SSL_PWD']
 	envVarsToCheck := []string{"CONSENSUS_KEY_PWD", "PORTAL_SSL_PWD"}
 
 	for _, envVar := range envVarsToCheck {

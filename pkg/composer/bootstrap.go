@@ -33,8 +33,15 @@ func (c *Composer) Bootstrap() error {
 func (c *Composer) bootstrapLight() error {
 	utils.Info("Bootstrapping light mode domain")
 
-	// 1. Clean logs and preserve configs (matching Python logic with cleanMeta=false)
-	// Key: Python bootstrap in light mode with cleanMeta=false should NOT delete conf/launch.conf
+	// Match Python exactly: clean all logs and data
+	// Python: self.clean(const.SERVICE_LIGHT)  # clean_meta defaults to True
+	if err := c.clean(domain.ServiceLight, true); err != nil {
+		return fmt.Errorf("failed to clean light instance: %w", err)
+	}
+
+	utils.Info("Starting generate genesis state")
+
+	// Connect to light instance
 	lightInst, exists := c.domain.Cluster[domain.ServiceLight]
 	if !exists {
 		return fmt.Errorf("light instance not found")
@@ -54,18 +61,6 @@ func (c *Composer) bootstrapLight() error {
 	if err := sshClient.Connect(); err != nil {
 		return fmt.Errorf("failed to connect to %s: %w", lightInst.IP, err)
 	}
-
-	// Clean with cleanMeta=false to preserve deployment files
-	if err := c.cleanInstanceMinimal(domain.ServiceLight, sshClient, false); err != nil {
-		return fmt.Errorf("failed to clean light instance: %w", err)
-	}
-
-	utils.Info("Starting generate genesis state")
-
-	// Initialize configuration (commented out to match Python - Python doesn't use initialize_conf)
-	// if err := c.initializeConf(sshClient); err != nil {
-	// 	return fmt.Errorf("failed to initialize configuration: %w", err)
-	// }
 
 	// Generate genesis state
 	if err := c.generateGenesis(sshClient); err != nil {
@@ -287,9 +282,8 @@ func (c *Composer) getBuildConf(filename string) string {
 // getRemoteClientDir returns the remote client directory path
 // Python: return join(self.deploy_dir, 'client')
 func (c *Composer) getRemoteClientDir() string {
-	// client is deployed to temporary directory and then to remote
-	// Python uses: /tmp/{chain_id}/{domain_label}/client
-	return fmt.Sprintf("/tmp/%s/%s/client", c.domain.ChainID, c.domain.DomainLabel)
+	// Match Python exactly: client dir at remote is under deploy_dir
+	return c.remoteClientDir
 }
 
 func copyFile(src, dst string) error {
@@ -410,53 +404,107 @@ func (c *Composer) clean(service string, cleanMeta bool) error {
 	return nil
 }
 
-// cleanInstanceMinimal performs minimal cleaning for bootstrap
-// Used in bootstrap light mode to preserve deployment files
-func (c *Composer) cleanInstanceMinimal(instanceName string, sshClient *ssh.Client, cleanMeta bool) error {
-	utils.Info("Minimal cleaning %s, cleanMeta: %v", instanceName, cleanMeta)
+// extractMygridPlacements extracts placement paths from mygrid_env configuration
+// Matches Python's extract_mygrid_placements function exactly
+func (c *Composer) extractMygridPlacements() []string {
+	placementPaths := make(map[string]bool)
 
-	inst, exists := c.domain.Cluster[instanceName]
-	if !exists {
-		return fmt.Errorf("instance %s not found", instanceName)
+	// Access storage.mygrid_env.mygrid_env from aldabaConf
+	storage, ok := c.aldabaConf["storage"].(map[string]interface{})
+	if !ok {
+		utils.Debug("No storage config found in aldabaConf")
+		return nil
 	}
 
-	deployDir := c.domain.DeployDir
-	if deployDir == "" {
-		deployDir = fmt.Sprintf("/data/pharos-node/%s", c.domain.DomainLabel)
+	mygridEnvOuter, ok := storage["mygrid_env"].(map[string]interface{})
+	if !ok {
+		utils.Debug("No mygrid_env config found in storage")
+		return nil
 	}
 
-	// For light mode in bootstrap, we need to be very conservative
-	// Only clean what's absolutely necessary
-	if inst.Service == domain.ServiceLight {
-		// Always clean log directory
-		logDir := fmt.Sprintf("%s/%s/log", deployDir, instanceName)
-		if err := c.cleanFolder(sshClient, logDir, ""); err != nil {
-			utils.Warn("Failed to clean log directory %s: %v", logDir, err)
+	mygridEnv, ok := mygridEnvOuter["mygrid_env"].(map[string]interface{})
+	if !ok {
+		utils.Debug("No inner mygrid_env config found")
+		return nil
+	}
+
+	// Get project_data_path
+	projectDataPath, _ := mygridEnv["project_data_path"].(string)
+	if projectDataPath == "" {
+		projectDataPath = "data"
+	}
+
+	// Get placements array
+	placements, ok := mygridEnv["placements"].([]interface{})
+	if !ok {
+		utils.Debug("No placements found in mygrid_env")
+		return nil
+	}
+
+	// Extract placement paths
+	// Python: for placement in placements:
+	//            for key, value in placement.items():
+	//                if isinstance(value, list):
+	//                    for item in value:
+	//                        placement_paths.add(f"{item}/{project_data_path}")
+	//                else:
+	//                    placement_paths.add(f"{value}/{project_data_path}")
+	for _, placement := range placements {
+		placementMap, ok := placement.(map[string]interface{})
+		if !ok {
+			continue
 		}
 
-		// Clean specific files in bin directory (but not binaries)
-		binDir := fmt.Sprintf("%s/%s/bin", deployDir, instanceName)
-		files := []string{
-			fmt.Sprintf("%s/epoch.conf", binDir),
-			fmt.Sprintf("%s/*.log", binDir),
-			fmt.Sprintf("%s/*.stdout", binDir),
-		}
-
-		for _, file := range files {
-			cmd := fmt.Sprintf("rm -f %s", file)
-			if _, err := sshClient.RunCommand(cmd); err != nil {
-				utils.Warn("Failed to remove file %s: %v", file, err)
+		for _, value := range placementMap {
+			switch v := value.(type) {
+			case []interface{}:
+				for _, item := range v {
+					if itemStr, ok := item.(string); ok {
+						path := filepath.Join(itemStr, projectDataPath)
+						placementPaths[path] = true
+					}
+				}
+			case string:
+				path := filepath.Join(v, projectDataPath)
+				placementPaths[path] = true
 			}
 		}
-
-		// IMPORTANT: Do NOT clean:
-		// - conf directory (contains launch.conf and other configs)
-		// - bin directory binaries (pharos_light, etc.)
-		// - data directory when cleanMeta=false
-		// - client directory
 	}
 
-	return nil
+	// Convert map to slice
+	result := make([]string, 0, len(placementPaths))
+	for path := range placementPaths {
+		result = append(result, path)
+	}
+
+	return result
+}
+
+// getMetasvcPath returns the metasvc_db path from mygrid_env configuration
+func (c *Composer) getMetasvcPath() string {
+	storage, ok := c.aldabaConf["storage"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+
+	mygridEnvOuter, ok := storage["mygrid_env"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+
+	mygridEnv, ok := mygridEnvOuter["mygrid_env"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+
+	metaStoreDisk, _ := mygridEnv["meta_store_disk"].(string)
+	projectDataPath, _ := mygridEnv["project_data_path"].(string)
+
+	if metaStoreDisk == "" || projectDataPath == "" {
+		return ""
+	}
+
+	return filepath.Join(metaStoreDisk, projectDataPath)
 }
 
 // cleanInstance cleans a specific instance
@@ -474,78 +522,73 @@ func (c *Composer) cleanInstance(instanceName string, sshClient *ssh.Client, cle
 		deployDir = fmt.Sprintf("/data/pharos-node/%s", c.domain.DomainLabel)
 	}
 
-	// For light mode, handle mygrid placements
-	if inst.Service == domain.ServiceLight {
-		// Python reads mygrid_env.json to extract placements
-		// The placements are the actual data storage locations
-		// For now, we'll use a simplified approach since we don't have mygrid_env.json access
+	instDir := filepath.Join(deployDir, instanceName)
 
-		// In Python, placements are extracted from mygrid_env.json like:
-		// ['/mnt1', '/mnt2', '/mnt3'] etc.
-		// These are the actual data directories, not the instance directory itself
+	// Extract mygrid placements from config
+	// Python: mygrid_placements = extract_mygrid_placements(self._aldaba_conf.storage.mygrid_env)
+	mygridPlacements := c.extractMygridPlacements()
+	metasvcPath := c.getMetasvcPath()
 
-		// Since we don't have mygrid_env.json, we'll handle the basic case
-		// The instance directory might contain data as a placement
-		instDir := fmt.Sprintf("%s/%s", deployDir, instanceName)
+	utils.Info("Clean placements: %v, metasvc_path: %s on host", mygridPlacements, metasvcPath)
 
+	// Clean placements
+	// Python: for placement in mygrid_placements:
+	//            if clean_meta:
+	//                clean_folder(conn, placement)
+	//            else:
+	//                clean_folder(conn, placement, 'metasvc_db')
+	for _, placement := range mygridPlacements {
 		if cleanMeta {
-			// When cleanMeta=true, clean all placements
-			// Python would clean all placement directories from mygrid_env.json
-			// For now, we'll clean the instance directory but preserve conf/bin
-			// This is a simplified approach
-
-			// Clean data directory (this might be a placement)
-			dataDir := fmt.Sprintf("%s/data", instDir)
-			if err := c.cleanFolder(sshClient, dataDir, ""); err != nil {
-				utils.Warn("Failed to clean data directory %s: %v", dataDir, err)
-			}
-
-			// Also clean instance directory contents but preserve conf and bin
-			// This simulates cleaning placements at instance level
-			// We'll use cleanFolder to preserve conf and bin
-			if err := c.cleanFolderMultiple(sshClient, instDir, "conf", "bin"); err != nil {
-				utils.Warn("Failed to clean instance directory %s: %v", instDir, err)
+			if err := c.cleanFolder(sshClient, placement, ""); err != nil {
+				utils.Warn("Failed to clean placement %s: %v", placement, err)
 			}
 		} else {
-			// When cleanMeta=false, preserve metasvc_db
-			// Python would clean all placements except metasvc_db
-			// For now, we'll do minimal cleaning in this mode
+			if err := c.cleanFolder(sshClient, placement, "metasvc_db"); err != nil {
+				utils.Warn("Failed to clean placement %s: %v", placement, err)
+			}
 		}
 	}
 
-	// Clean data directory if cleanMeta is true (matching Python logic)
-	// This handles non-light services
+	// Clean data directory if cleanMeta is true
+	// Python: if clean_meta:
+	//            clean_folder(conn, join(instance.dir, 'data'))
 	if cleanMeta {
-		dataDir := fmt.Sprintf("%s/%s/data", deployDir, instanceName)
+		dataDir := filepath.Join(instDir, "data")
 		if err := c.cleanFolder(sshClient, dataDir, ""); err != nil {
 			utils.Warn("Failed to clean data directory %s: %v", dataDir, err)
 		}
 	}
 
-	// Always clean log directory (matching Python logic)
-	logDir := fmt.Sprintf("%s/%s/log", deployDir, instanceName)
+	// Always clean log directory
+	// Python: clean_folder(conn, join(instance.dir, 'log'))
+	logDir := filepath.Join(instDir, "log")
 	if err := c.cleanFolder(sshClient, logDir, ""); err != nil {
 		utils.Warn("Failed to clean log directory %s: %v", logDir, err)
 	}
 
-	// Clean specific files in bin directory (matching Python logic)
-	binDir := fmt.Sprintf("%s/%s/bin", deployDir, instanceName)
-	files := []string{
-		fmt.Sprintf("%s/epoch.conf", binDir),
-		fmt.Sprintf("%s/*.log", binDir),
-		fmt.Sprintf("%s/*.stdout", binDir),
+	// Clean specific files in bin directory
+	// Python: clean_files = [
+	//            join(instance.dir, 'bin/epoch.conf'),
+	//            join(instance.dir, 'bin/*.log'),
+	//            join(instance.dir, 'bin/*.stdout')
+	//         ]
+	binDir := filepath.Join(instDir, "bin")
+	cleanFiles := []string{
+		filepath.Join(binDir, "epoch.conf"),
+		filepath.Join(binDir, "*.log"),
+		filepath.Join(binDir, "*.stdout"),
 	}
 
-	for _, file := range files {
+	for _, file := range cleanFiles {
 		cmd := fmt.Sprintf("rm -f %s", file)
 		if _, err := sshClient.RunCommand(cmd); err != nil {
 			utils.Warn("Failed to remove file %s: %v", file, err)
 		}
 	}
 
-	// IMPORTANT: Do NOT clean conf directory!
-	// Python version preserves conf/launch.conf and other config files
-	// This is critical for deploy -> bootstrap -> start workflow to work
+	// NOTE: Python version does NOT delete conf/ directory - this preserves launch.conf etc.
+	// This is critical for the deploy -> bootstrap -> start workflow
+	_ = inst // Suppress unused warning
 
 	return nil
 }

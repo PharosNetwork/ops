@@ -83,40 +83,75 @@ func (c *ComposerRefactor) stopServiceInStop(service string, force bool) error {
 }
 
 // stopHostForStop stops service instances on a specific host
+// Matches Python's stop_host logic exactly
 func (c *ComposerRefactor) stopHostInStop(client *ssh.Client, service string, instances []*domain.Instance, force bool) error {
+	utils.Info("stop service %s on %s, force %t", service, client.GetHost(), force)
+
 	// Docker mode handling
 	if c.domain.Docker.Enable && service == "" {
-		var cmd string
-		if force {
-			cmd = fmt.Sprintf("cd %s; docker compose down -f", c.domain.DeployDir)
-		} else {
-			cmd = fmt.Sprintf("cd %s; docker compose stop", c.domain.DeployDir)
-		}
+		cmd := fmt.Sprintf("cd %s; docker compose stop", c.domain.DeployDir)
 		_, err := client.RunCommand(cmd)
 		return err
 	}
 
-	// Stop each instance
-	for _, instance := range instances {
-		if force {
+	if !force {
+		// Graceful stop: send SIGTERM to all instances first
+		for _, instance := range instances {
+			if err := c.gracefulStopInstanceForStop(instance, client); err != nil {
+				utils.Debug("Failed to send SIGTERM to instance %s: %v", instance.Name, err)
+			}
+		}
+
+		// Wait for processes to exit, checking status periodically
+		// Python: while self.status_host(conn, service) == 0:
+		timeout := 5
+		for c.hasRunningProcessesOnHost(client, instances) {
+			if timeout <= 0 {
+				// Timeout reached, force stop all instances
+				for _, instance := range instances {
+					if err := c.stopInstanceForStop(instance, client); err != nil {
+						utils.Debug("Failed to force stop instance %s: %v", instance.Name, err)
+					}
+				}
+				utils.Info("stop service %s on %s immediately", service, client.GetHost())
+				return nil
+			}
+			timeout--
+			utils.Debug("stop service %s on %s will sleep 1s", service, client.GetHost())
+			time.Sleep(1 * time.Second)
+		}
+		utils.Info("stop service %s on %s gracefully", service, client.GetHost())
+	} else {
+		// Force stop: SIGKILL all instances immediately
+		for _, instance := range instances {
 			if err := c.stopInstanceForStop(instance, client); err != nil {
 				utils.Debug("Failed to force stop instance %s: %v", instance.Name, err)
 			}
-		} else {
-			if err := c.gracefulStopInstanceForStop(instance, client); err != nil {
-				utils.Debug("Failed to gracefully stop instance %s: %v", instance.Name, err)
-				// Try force stop if graceful fails
-				if err := c.stopInstanceForStop(instance, client); err != nil {
-					utils.Error("Failed to force stop instance %s after graceful failure: %v", instance.Name, err)
-				}
-			}
 		}
+		utils.Info("stop service %s on %s immediately", service, client.GetHost())
 	}
 
 	return nil
 }
 
+// hasRunningProcessesOnHost checks if any instance has running processes
+// Returns true if any process is running (like Python's status_host returning 0)
+func (c *ComposerRefactor) hasRunningProcessesOnHost(client *ssh.Client, instances []*domain.Instance) bool {
+	for _, instance := range instances {
+		running, err := c.isInstanceRunning(instance, client)
+		if err != nil {
+			utils.Debug("Failed to check instance %s status: %v", instance.Name, err)
+			continue
+		}
+		if running {
+			return true
+		}
+	}
+	return false
+}
+
 // gracefulStopInstance gracefully stops a service instance (SIGTERM)
+// Only sends SIGTERM, does not wait - waiting is handled in stopHostInStop
 func (c *ComposerRefactor) gracefulStopInstanceForStop(instance *domain.Instance, client *ssh.Client) error {
 	utils.Info("stop %s on %s", instance.Name, client.GetHost())
 
@@ -127,13 +162,8 @@ func (c *ComposerRefactor) gracefulStopInstanceForStop(instance *domain.Instance
 		return err
 	}
 
-	// Native mode - send SIGTERM
-	if err := c.sendSignalToInstance(instance, client, 15); err != nil {
-		return err
-	}
-
-	// Wait for graceful shutdown
-	return c.waitForGracefulShutdown(instance, client)
+	// Native mode - send SIGTERM (signal 15)
+	return c.sendSignalToInstance(instance, client, 15)
 }
 
 // stopInstance forcefully stops a service instance (SIGKILL)
@@ -178,34 +208,6 @@ func (c *ComposerRefactor) sendSignalToInstance(instance *domain.Instance, clien
 
 	_, err := client.RunCommand(cmd)
 	return err
-}
-
-// waitForGracefulShutdown waits for processes to exit after SIGTERM
-func (c *ComposerRefactor) waitForGracefulShutdown(instance *domain.Instance, client *ssh.Client) error {
-	// Wait up to 5 seconds (matching Python implementation)
-	timeout := 5 * time.Second
-	interval := 1 * time.Second
-
-	start := time.Now()
-	for time.Since(start) < timeout {
-		// Check if processes are still running
-		running, err := c.isInstanceRunning(instance, client)
-		if err != nil {
-			utils.Debug("Failed to check instance status: %v", err)
-			continue
-		}
-
-		if !running {
-			utils.Info("%s stopped gracefully", instance.Name)
-			return nil
-		}
-
-		time.Sleep(interval)
-	}
-
-	// Timeout reached
-	utils.Warn("%s did not stop gracefully within %v, forcing...", instance.Name, timeout)
-	return c.stopInstanceForStop(instance, client)
 }
 
 // isInstanceRunning checks if an instance has running processes
