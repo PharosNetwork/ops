@@ -10,21 +10,31 @@ import (
 var bootstrapCmd = &cobra.Command{
 	Use:   "bootstrap [domain_files...]",
 	Short: "Bootstrap pharos domains",
-	Long:  "Generate genesis state and initialize pharos domains. Old data and logs will be cleaned up.",
-	Args:  cobra.MinimumNArgs(1),
+	Long:  "Generate genesis state and initialize pharos domains. Old data and logs will be cleaned up.\nIf no domain files are provided, runs in simplified mode without domain.json.",
+	Args:  cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		for _, domainFile := range args {
-			utils.Info("Bootstrapping domain: %s", domainFile)
+		if len(args) > 0 {
+			// Old way: with domain.json files
+			utils.Warn("Using domain.json is deprecated. Bootstrap will work without it in the future.")
 			
-			c, err := composer.New(domainFile)
-			if err != nil {
-				utils.Error("Failed to load domain file %s: %v", domainFile, err)
-				continue
+			for _, domainFile := range args {
+				utils.Info("Bootstrapping domain: %s", domainFile)
+				
+				c, err := composer.New(domainFile)
+				if err != nil {
+					utils.Error("Failed to load domain file %s: %v", domainFile, err)
+					continue
+				}
+				
+				if err := c.Bootstrap(); err != nil {
+					utils.Error("Failed to bootstrap domain: %v", err)
+					continue
+				}
 			}
-			
-			if err := c.Bootstrap(); err != nil {
-				utils.Error("Failed to bootstrap domain: %v", err)
-				continue
+		} else {
+			// New way: without domain.json
+			if err := BootstrapSimple(); err != nil {
+				return err
 			}
 		}
 		
