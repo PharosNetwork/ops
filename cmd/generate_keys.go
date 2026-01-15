@@ -107,10 +107,13 @@ func generateBLS12381Key(outputDir string, passwd string) error {
 	}
 
 	cmd := exec.Command("bash", "-c", cmdStr)
-	output, err := cmd.Output()
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed to execute pharos_cli: %w", err)
+		return fmt.Errorf("failed to execute pharos_cli: %w, output: %s", err, string(output))
 	}
+
+	// Debug: print raw output
+	fmt.Printf("DEBUG: pharos_cli output:\n%s\n", string(output))
 
 	// Parse output to extract keys
 	// Expected format:
@@ -120,15 +123,19 @@ func generateBLS12381Key(outputDir string, passwd string) error {
 
 	var prikey, pubkey string
 	for _, line := range lines {
+		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "prikey:") {
-			prikey = strings.TrimPrefix(line, "prikey:")
+			prikey = strings.TrimSpace(strings.TrimPrefix(line, "prikey:"))
 		} else if strings.HasPrefix(line, "pubkey:") {
-			pubkey = strings.TrimPrefix(line, "pubkey:")
+			pubkey = strings.TrimSpace(strings.TrimPrefix(line, "pubkey:"))
 		}
 	}
 
+	fmt.Printf("DEBUG: parsed prikey: %s\n", prikey)
+	fmt.Printf("DEBUG: parsed pubkey: %s\n", pubkey)
+
 	if prikey == "" || pubkey == "" {
-		return fmt.Errorf("failed to parse BLS keys from pharos_cli output")
+		return fmt.Errorf("failed to parse BLS keys from pharos_cli output: prikey=%q, pubkey=%q", prikey, pubkey)
 	}
 
 	// Write keys to files
