@@ -1,15 +1,11 @@
 package cmd
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/x509"
-	"encoding/pem"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -52,65 +48,32 @@ var generateKeysCmd = &cobra.Command{
 }
 
 func generatePrime256v1Key(outputDir string, passwd string) error {
-	// Generate ECDSA P-256 private key
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return fmt.Errorf("failed to generate ECDSA key: %w", err)
-	}
-
-	// Serialize private key
-	privBytes, err := x509.MarshalECPrivateKey(privateKey)
-	if err != nil {
-		return fmt.Errorf("failed to marshal private key: %w", err)
-	}
-
-	// Create PEM block for private key
-	privPEM := &pem.Block{
-		Type:  "EC PRIVATE KEY",
-		Bytes: privBytes,
-	}
-
-	// Encrypt if password provided
-	if passwd != "" {
-		encryptedPEM, err := x509.EncryptPEMBlock(rand.Reader, privPEM.Type, privPEM.Bytes, []byte(passwd), x509.PEMCipherAES256)
-		if err != nil {
-			return fmt.Errorf("failed to encrypt private key: %w", err)
-		}
-		privPEM = encryptedPEM
-	}
-
-	// Write private key
+	// Use openssl to generate prime256v1 key (same as Python version)
 	keyPath := filepath.Join(outputDir, "domain.key")
-	keyFile, err := os.Create(keyPath)
-	if err != nil {
-		return fmt.Errorf("failed to create key file: %w", err)
-	}
-	defer keyFile.Close()
+	pubPath := filepath.Join(outputDir, "domain.pub")
 
-	if err := pem.Encode(keyFile, privPEM); err != nil {
-		return fmt.Errorf("failed to write private key: %w", err)
+	// Generate encrypted private key using openssl
+	// openssl ecparam -name prime256v1 -genkey | openssl pkcs8 -topk8 -outform pem -out domain.key -v2 aes-256-cbc -v2prf hmacWithSHA256 -passout pass:123abc
+	cmdStr := fmt.Sprintf("openssl ecparam -name prime256v1 -genkey | openssl pkcs8 -topk8 -outform pem -out %s -v2 aes-256-cbc -v2prf hmacWithSHA256 -passout pass:%s", keyPath, passwd)
+	cmd := exec.Command("bash", "-c", cmdStr)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to generate prime256v1 key: %w", err)
 	}
 	fmt.Printf("Generated prime256v1 private key: %s\n", keyPath)
 
-	// Serialize and write public key
-	pubBytes, err := x509.MarshalPKIXPublicKey(&privateKey.PublicKey)
+	// Extract public key in hex format (without 0x prefix)
+	// openssl ec -in domain.key -passin pass:123abc -pubout -outform DER | tail -c 65 | xxd -p -c 65
+	extractPubCmd := fmt.Sprintf("openssl ec -in %s -passin pass:%s -pubout -outform DER 2>/dev/null | tail -c 65 | xxd -p -c 65 | tr -d '\\n'", keyPath, passwd)
+	pubCmd := exec.Command("bash", "-c", extractPubCmd)
+	pubOutput, err := pubCmd.Output()
 	if err != nil {
-		return fmt.Errorf("failed to marshal public key: %w", err)
+		return fmt.Errorf("failed to extract public key: %w", err)
 	}
 
-	pubPEM := &pem.Block{
-		Type:  "PUBLIC KEY",
-		Bytes: pubBytes,
-	}
+	// Add prefix "1003" to public key
+	pubKeyHex := "1003" + string(pubOutput)
 
-	pubPath := filepath.Join(outputDir, "domain.pub")
-	pubFile, err := os.Create(pubPath)
-	if err != nil {
-		return fmt.Errorf("failed to create pub file: %w", err)
-	}
-	defer pubFile.Close()
-
-	if err := pem.Encode(pubFile, pubPEM); err != nil {
+	if err := os.WriteFile(pubPath, []byte(pubKeyHex), 0644); err != nil {
 		return fmt.Errorf("failed to write public key: %w", err)
 	}
 	fmt.Printf("Generated prime256v1 public key: %s\n", pubPath)
@@ -138,9 +101,9 @@ func generateBLS12381Key(outputDir string, passwd string) error {
 	// Generate BLS key using pharos_cli
 	var cmdStr string
 	if hasEvmone {
-		cmdStr = fmt.Sprintf("cd ./bin && LD_PRELOAD=./libevmone.so ./pharos_cli crypto -t gen-key -a bls12381 | tail -n 2")
+		cmdStr = "cd ./bin && LD_PRELOAD=./libevmone.so ./pharos_cli crypto -t gen-key -a bls12381 | tail -n 2"
 	} else {
-		cmdStr = fmt.Sprintf("cd ./bin && ./pharos_cli crypto -t gen-key -a bls12381 | tail -n 2")
+		cmdStr = "cd ./bin && ./pharos_cli crypto -t gen-key -a bls12381 | tail -n 2"
 	}
 
 	cmd := exec.Command("bash", "-c", cmdStr)
@@ -151,15 +114,28 @@ func generateBLS12381Key(outputDir string, passwd string) error {
 
 	// Parse output to extract keys
 	// Expected format:
-	// prikey:xxxxx
-	// pubkey:yyyyy
-	lines := string(output)
+	// prikey:0x400238d28e50623cba45dfd569ac65d51905b2f6ffbe791ac086df191922ffcb588b
+	// pubkey:0x400389d3bfe4256ace7d4db0d1a9ca5add712553490fc8298a3cd2c43e1b0004f21598df06655cdc514e73f21b01d9c23b82
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 
-	// Write to files (simplified - in production should parse properly)
-	if err := os.WriteFile(blsKeyPath, []byte(lines), 0600); err != nil {
+	var prikey, pubkey string
+	for _, line := range lines {
+		if strings.HasPrefix(line, "prikey:") {
+			prikey = strings.TrimPrefix(line, "prikey:")
+		} else if strings.HasPrefix(line, "pubkey:") {
+			pubkey = strings.TrimPrefix(line, "pubkey:")
+		}
+	}
+
+	if prikey == "" || pubkey == "" {
+		return fmt.Errorf("failed to parse BLS keys from pharos_cli output")
+	}
+
+	// Write keys to files
+	if err := os.WriteFile(blsKeyPath, []byte(prikey), 0600); err != nil {
 		return err
 	}
-	if err := os.WriteFile(blsPubPath, []byte(lines), 0644); err != nil {
+	if err := os.WriteFile(blsPubPath, []byte(pubkey), 0644); err != nil {
 		return err
 	}
 
