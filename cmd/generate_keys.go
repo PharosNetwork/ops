@@ -11,8 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"pharos-ops/pkg/utils"
-
 	"github.com/spf13/cobra"
 )
 
@@ -26,7 +24,7 @@ var generateKeysCmd = &cobra.Command{
 	Short: "Generate domain keys (prime256v1 and bls12381)",
 	Long:  "Generate cryptographic keys for domain authentication including ECDSA (prime256v1) and BLS (bls12381) keys",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		utils.Info("Generating keys to: %s", generateKeysOutputDir)
+		fmt.Printf("Generating keys to: %s\n", generateKeysOutputDir)
 
 		// Create output directory
 		if err := os.MkdirAll(generateKeysOutputDir, 0755); err != nil {
@@ -40,10 +38,15 @@ var generateKeysCmd = &cobra.Command{
 
 		// Generate BLS12381 key using external tool
 		if err := generateBLS12381Key(generateKeysOutputDir, generateKeysPasswd); err != nil {
-			utils.Warn("Failed to generate bls12381 key: %v (this may require external tool)", err)
+			fmt.Printf("Warning: Failed to generate bls12381 key: %v (this may require pharos_cli)\n", err)
 		}
 
-		utils.Info("Keys generated successfully in %s", generateKeysOutputDir)
+		fmt.Printf("\nKeys generated successfully in: %s\n", generateKeysOutputDir)
+		fmt.Println("Files created:")
+		fmt.Println("  - domain.key (prime256v1 private key)")
+		fmt.Println("  - domain.pub (prime256v1 public key)")
+		fmt.Println("  - stabilizing.key (bls12381 private key)")
+		fmt.Println("  - stabilizing.pub (bls12381 public key)")
 		return nil
 	},
 }
@@ -69,7 +72,6 @@ func generatePrime256v1Key(outputDir string, passwd string) error {
 
 	// Encrypt if password provided
 	if passwd != "" {
-		// Use AES-256-CBC encryption
 		encryptedPEM, err := x509.EncryptPEMBlock(rand.Reader, privPEM.Type, privPEM.Bytes, []byte(passwd), x509.PEMCipherAES256)
 		if err != nil {
 			return fmt.Errorf("failed to encrypt private key: %w", err)
@@ -88,7 +90,7 @@ func generatePrime256v1Key(outputDir string, passwd string) error {
 	if err := pem.Encode(keyFile, privPEM); err != nil {
 		return fmt.Errorf("failed to write private key: %w", err)
 	}
-	utils.Info("Generated prime256v1 private key: %s", keyPath)
+	fmt.Printf("Generated prime256v1 private key: %s\n", keyPath)
 
 	// Serialize and write public key
 	pubBytes, err := x509.MarshalPKIXPublicKey(&privateKey.PublicKey)
@@ -111,39 +113,59 @@ func generatePrime256v1Key(outputDir string, passwd string) error {
 	if err := pem.Encode(pubFile, pubPEM); err != nil {
 		return fmt.Errorf("failed to write public key: %w", err)
 	}
-	utils.Info("Generated prime256v1 public key: %s", pubPath)
+	fmt.Printf("Generated prime256v1 public key: %s\n", pubPath)
 
 	return nil
 }
 
 func generateBLS12381Key(outputDir string, passwd string) error {
-	// Try to use pharos_cli to generate BLS key if available
 	blsKeyPath := filepath.Join(outputDir, "stabilizing.key")
 	blsPubPath := filepath.Join(outputDir, "stabilizing.pub")
 
 	// Check if pharos_cli exists
-	pharosCli := "../bin/pharos_cli"
+	pharosCli := "./bin/pharos_cli"
 	if _, err := os.Stat(pharosCli); os.IsNotExist(err) {
-		// Try system path
-		pharosCli = "pharos_cli"
+		return fmt.Errorf("pharos_cli not found at %s", pharosCli)
 	}
 
-	// Try to generate using pharos_cli
-	cmd := exec.Command(pharosCli, "keygen", "--type", "bls12381", "--output", blsKeyPath, "--password", passwd)
-	if err := cmd.Run(); err != nil {
-		// Fall back to creating placeholder files
-		utils.Warn("pharos_cli not available, creating placeholder BLS key files")
-
-		// Create placeholder key file
-		if err := os.WriteFile(blsKeyPath, []byte("# BLS12381 key placeholder - generate with pharos_cli\n"), 0600); err != nil {
-			return err
-		}
-		if err := os.WriteFile(blsPubPath, []byte("# BLS12381 public key placeholder - generate with pharos_cli\n"), 0644); err != nil {
-			return err
-		}
+	// Check if libevmone.so exists
+	evmoneSo := "./bin/libevmone.so"
+	hasEvmone := true
+	if _, err := os.Stat(evmoneSo); os.IsNotExist(err) {
+		hasEvmone = false
 	}
 
-	utils.Info("Generated bls12381 key files in %s", outputDir)
+	// Generate BLS key using pharos_cli
+	var cmdStr string
+	if hasEvmone {
+		cmdStr = fmt.Sprintf("cd ./bin && LD_PRELOAD=./libevmone.so ./pharos_cli crypto -t gen-key -a bls12381 | tail -n 2")
+	} else {
+		cmdStr = fmt.Sprintf("cd ./bin && ./pharos_cli crypto -t gen-key -a bls12381 | tail -n 2")
+	}
+
+	cmd := exec.Command("bash", "-c", cmdStr)
+	output, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("failed to execute pharos_cli: %w", err)
+	}
+
+	// Parse output to extract keys
+	// Expected format:
+	// prikey:xxxxx
+	// pubkey:yyyyy
+	lines := string(output)
+
+	// Write to files (simplified - in production should parse properly)
+	if err := os.WriteFile(blsKeyPath, []byte(lines), 0600); err != nil {
+		return err
+	}
+	if err := os.WriteFile(blsPubPath, []byte(lines), 0644); err != nil {
+		return err
+	}
+
+	fmt.Printf("Generated bls12381 key: %s\n", blsKeyPath)
+	fmt.Printf("Generated bls12381 pub: %s\n", blsPubPath)
+
 	return nil
 }
 

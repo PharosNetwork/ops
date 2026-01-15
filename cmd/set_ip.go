@@ -6,72 +6,61 @@ import (
 	"net"
 	"os"
 
-	"pharos-ops/pkg/utils"
-
 	"github.com/spf13/cobra"
 )
 
 var setIPCmd = &cobra.Command{
-	Use:   "set-ip [ip] [pharos_conf_file]",
-	Short: "Set public IP in pharos configuration",
-	Long:  "Update the public IP address in pharos.conf file (aldaba.startup_config.init_config.host_ip)",
-	Args:  cobra.RangeArgs(1, 2),
+	Use:   "set-ip <ip_address>",
+	Short: "Set public IP address in pharos.conf",
+	Long:  "Update the host_ip field in pharos.conf with the specified public IP address",
+	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ip := args[0]
-		pharosConfFile := "../conf/pharos.conf"
-		if len(args) > 1 {
-			pharosConfFile = args[1]
-		}
+		pharosConfFile := "./conf/pharos.conf"
 
 		// Validate IP address
-		if ip == "127.0.0.1" {
-			return fmt.Errorf("please set a valid public IP address")
-		}
-
 		if net.ParseIP(ip) == nil {
 			return fmt.Errorf("invalid IP address: %s", ip)
 		}
 
-		// Read pharos.conf file
-		data, err := os.ReadFile(pharosConfFile)
+		if ip == "127.0.0.1" {
+			return fmt.Errorf("please set a public IP address, not 127.0.0.1")
+		}
+
+		// Read pharos.conf
+		confData, err := os.ReadFile(pharosConfFile)
 		if err != nil {
-			return fmt.Errorf("failed to read pharos conf file: %w", err)
+			return fmt.Errorf("failed to read pharos.conf: %w", err)
 		}
 
 		var pharosConf map[string]interface{}
-		if err := json.Unmarshal(data, &pharosConf); err != nil {
-			return fmt.Errorf("failed to parse pharos conf file: %w", err)
+		if err := json.Unmarshal(confData, &pharosConf); err != nil {
+			return fmt.Errorf("failed to parse pharos.conf: %w", err)
 		}
 
-		// Update IP in pharos.conf based on new format
-		// Format: {"aldaba": {"startup_config": {"init_config": {"host_ip": "127.0.0.1", ...}}}}
+		// Navigate to aldaba.startup_config.init_config.host_ip
 		aldaba, ok := pharosConf["aldaba"].(map[string]interface{})
 		if !ok {
-			utils.Warn("aldaba.startup_config not found in pharos.conf")
 			return fmt.Errorf("aldaba not found in pharos.conf")
 		}
 
 		startupConfig, ok := aldaba["startup_config"].(map[string]interface{})
 		if !ok {
-			utils.Warn("init_config not found in startup_config")
 			return fmt.Errorf("startup_config not found in aldaba")
 		}
 
 		initConfig, ok := startupConfig["init_config"].(map[string]interface{})
 		if !ok {
-			utils.Warn("init_config not found in startup_config")
 			return fmt.Errorf("init_config not found in startup_config")
 		}
 
 		// Update host_ip
-		if oldIP, exists := initConfig["host_ip"]; exists {
-			initConfig["host_ip"] = ip
-			utils.Info("Updated host_ip: %v -> %s", oldIP, ip)
-		} else {
-			utils.Warn("host_ip not found in init_config")
-			initConfig["host_ip"] = ip
-			utils.Info("Added host_ip: %s", ip)
+		oldIP := ""
+		if hostIP, ok := initConfig["host_ip"].(string); ok {
+			oldIP = hostIP
 		}
+
+		initConfig["host_ip"] = ip
 
 		// Write back to pharos.conf
 		updatedData, err := json.MarshalIndent(pharosConf, "", "  ")
@@ -80,10 +69,16 @@ var setIPCmd = &cobra.Command{
 		}
 
 		if err := os.WriteFile(pharosConfFile, updatedData, 0644); err != nil {
-			return fmt.Errorf("failed to write pharos conf file: %w", err)
+			return fmt.Errorf("failed to write pharos.conf: %w", err)
 		}
 
-		utils.Info("Set public ip to %s in %s", ip, pharosConfFile)
+		if oldIP != "" {
+			fmt.Printf("Updated host_ip: %s -> %s\n", oldIP, ip)
+		} else {
+			fmt.Printf("Set host_ip to: %s\n", ip)
+		}
+		fmt.Printf("Successfully updated %s\n", pharosConfFile)
+
 		return nil
 	},
 }

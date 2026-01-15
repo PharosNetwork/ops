@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"os"
 
-	"pharos-ops/pkg/utils"
-
 	"github.com/spf13/cobra"
 )
 
@@ -25,7 +23,7 @@ var encodeKeyCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		keyPath := args[0]
 
-		utils.Info("key path: %s", keyPath)
+		fmt.Printf("key path: %s\n", keyPath)
 
 		// Read key file
 		keyData, err := os.ReadFile(keyPath)
@@ -52,8 +50,8 @@ var encodeKeyToConfCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		keyPath := args[0]
 
-		utils.Info("Encoding %s key from: %s", encodeKeyType, keyPath)
-		utils.Info("Writing to: %s", encodeKeyToPharosConf)
+		fmt.Printf("Encoding %s key from: %s\n", encodeKeyType, keyPath)
+		fmt.Printf("Writing to: %s\n", encodeKeyToPharosConf)
 
 		// Read key file
 		keyData, err := os.ReadFile(keyPath)
@@ -95,10 +93,10 @@ var encodeKeyToConfCmd = &cobra.Command{
 		switch encodeKeyType {
 		case "domain":
 			secretConfig["domain_key"] = encoded
-			utils.Info("Updated domain_key in pharos.conf")
+			fmt.Println("Updated domain_key in pharos.conf")
 		case "stabilizing":
 			secretConfig["stabilizing_key"] = encoded
-			utils.Info("Updated stabilizing_key in pharos.conf")
+			fmt.Println("Updated stabilizing_key in pharos.conf")
 		default:
 			return fmt.Errorf("unknown key type: %s (must be 'domain' or 'stabilizing')", encodeKeyType)
 		}
@@ -113,7 +111,7 @@ var encodeKeyToConfCmd = &cobra.Command{
 			return fmt.Errorf("failed to write pharos conf: %w", err)
 		}
 
-		utils.Info("Successfully wrote %s key to %s", encodeKeyType, encodeKeyToPharosConf)
+		fmt.Printf("Successfully wrote %s key to %s\n", encodeKeyType, encodeKeyToPharosConf)
 		return nil
 	},
 }
@@ -122,7 +120,7 @@ func init() {
 	rootCmd.AddCommand(encodeKeyCmd)
 	rootCmd.AddCommand(encodeKeyToConfCmd)
 
-	encodeKeyToConfCmd.Flags().StringVar(&encodeKeyToPharosConf, "pharos-conf", "../conf/pharos.conf",
+	encodeKeyToConfCmd.Flags().StringVar(&encodeKeyToPharosConf, "pharos-conf", "./conf/pharos.conf",
 		"Path to pharos.conf file")
 	encodeKeyToConfCmd.Flags().StringVar(&encodeKeyType, "key-type", "",
 		"Type of key: domain or stabilizing")

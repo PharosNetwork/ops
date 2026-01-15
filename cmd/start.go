@@ -2,58 +2,61 @@ package cmd
 
 import (
 	"fmt"
-	"pharos-ops/pkg/composer"
-	"pharos-ops/pkg/utils"
+	"os"
+	"os/exec"
 
 	"github.com/spf13/cobra"
 )
 
-var (
-	startService           string
-	extraMygridServiceArgs string
-)
-
 var startCmd = &cobra.Command{
-	Use:   "start [domain_files...]",
-	Short: "Start pharos node",
-	Long:  "Start pharos node from domain configuration.\nIf no domain files are provided, runs in simplified mode without domain.json.",
-	Args:  cobra.ArbitraryArgs,
+	Use:   "start",
+	Short: "Start pharos services",
+	Long:  "Start pharos_light service in daemon mode",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if len(args) > 0 {
-			// Old way: with domain.json files
-			utils.Warn("Using domain.json is deprecated. Start will work without it in the future.")
-			
-			for _, domainFile := range args {
-				fmt.Printf("%s\n", domainFile)
+		fmt.Println("Starting services")
 
-				c, err := composer.New(domainFile)
-				if err != nil {
-					utils.Error("Failed to load domain file %s: %v", domainFile, err)
-					continue
-				}
-
-				if err := c.Start(startService, extraMygridServiceArgs); err != nil {
-					utils.Error("Failed to start domain %s: %v", domainFile, err)
-					continue
-				}
-			}
-		} else {
-			// New way: without domain.json
-			if err := StartSimple(startService, extraMygridServiceArgs); err != nil {
-				return err
-			}
+		// Check if pharos.conf exists
+		pharosConfFile := "./conf/pharos.conf"
+		if _, err := os.Stat(pharosConfFile); os.IsNotExist(err) {
+			return fmt.Errorf("config file not found: %s", pharosConfFile)
 		}
 
+		// Check if pharos_light binary exists
+		pharosLight := "./bin/pharos_light"
+		if _, err := os.Stat(pharosLight); os.IsNotExist(err) {
+			return fmt.Errorf("pharos_light binary not found: %s", pharosLight)
+		}
+
+		// Check if libevmone.so exists
+		evmoneSo := "./bin/libevmone.so"
+		hasEvmone := true
+		if _, err := os.Stat(evmoneSo); os.IsNotExist(err) {
+			hasEvmone = false
+		}
+
+		// Build command
+		var cmdStr string
+		if hasEvmone {
+			cmdStr = "cd ./bin && LD_PRELOAD=./libevmone.so ./pharos_light -c ../conf/pharos.conf -d"
+		} else {
+			cmdStr = "cd ./bin && ./pharos_light -c ../conf/pharos.conf -d"
+		}
+
+		fmt.Printf("Starting pharos_light: %s\n", cmdStr)
+
+		execCmd := exec.Command("bash", "-c", cmdStr)
+		execCmd.Stdout = os.Stdout
+		execCmd.Stderr = os.Stderr
+
+		if err := execCmd.Start(); err != nil {
+			return fmt.Errorf("failed to start services: %w", err)
+		}
+
+		fmt.Println("Services started successfully")
 		return nil
 	},
 }
 
 func init() {
 	rootCmd.AddCommand(startCmd)
-
-	// Add flags matching Python version
-	startCmd.Flags().StringVarP(&startService, "service", "s", "",
-		"service [etcd|mygrid_service|portal|dog|txpool|controller|compute]]")
-	startCmd.Flags().StringVarP(&extraMygridServiceArgs, "extra-mygrid_service-args", "a", "",
-		"extra storage args for storage start command")
 }

@@ -2,48 +2,61 @@ package cmd
 
 import (
 	"fmt"
-	"pharos-ops/pkg/composer"
-	"pharos-ops/pkg/utils"
+	"os/exec"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
 
 var (
-	stopService string
-	stopForce   bool
+	stopForce bool
 )
 
 var stopCmd = &cobra.Command{
-	Use:   "stop [domain_files...]",
-	Short: "Stop pharos node",
-	Long:  "Stop pharos node from domain configuration.\nIf no domain files are provided, runs in simplified mode without domain.json.",
-	Args:  cobra.ArbitraryArgs,
+	Use:   "stop",
+	Short: "Stop pharos services",
+	Long:  "Stop running pharos_light processes",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if len(args) > 0 {
-			// Old way: with domain.json files
-			utils.Warn("Using domain.json is deprecated. Stop will work without it in the future.")
-			
-			for _, domainFile := range args {
-				fmt.Printf("%s\n", domainFile)
+		fmt.Printf("Stopping services (force: %v)\n", stopForce)
 
-				c, err := composer.New(domainFile)
-				if err != nil {
-					utils.Error("Failed to load domain file %s: %v", domainFile, err)
-					continue
-				}
+		// Find pharos_light process
+		findCmd := exec.Command("bash", "-c", "ps -eo pid,cmd | grep pharos_light | grep -v grep | awk '{print $1}'")
+		output, err := findCmd.Output()
+		if err != nil {
+			fmt.Println("No pharos_light process found")
+			return nil
+		}
 
-				if err := c.Stop(stopService, stopForce); err != nil {
-					utils.Error("Failed to stop domain %s: %v", domainFile, err)
-					continue
-				}
+		pids := strings.Split(strings.TrimSpace(string(output)), "\n")
+		if len(pids) == 0 || (len(pids) == 1 && pids[0] == "") {
+			fmt.Println("No pharos_light process found")
+			return nil
+		}
+
+		for _, pid := range pids {
+			pid = strings.TrimSpace(pid)
+			if pid == "" {
+				continue
 			}
-		} else {
-			// New way: without domain.json
-			if err := StopSimple(stopService, stopForce); err != nil {
-				return err
+
+			var signal string
+			if stopForce {
+				signal = "-9"
+				fmt.Printf("Force stopping pharos_light (PID: %s)\n", pid)
+			} else {
+				signal = "-15"
+				fmt.Printf("Gracefully stopping pharos_light (PID: %s)\n", pid)
+			}
+
+			killCmd := exec.Command("kill", signal, pid)
+			if err := killCmd.Run(); err != nil {
+				fmt.Printf("Failed to stop process %s: %v\n", pid, err)
+			} else {
+				fmt.Printf("Successfully stopped process %s\n", pid)
 			}
 		}
 
+		fmt.Println("Services stopped successfully")
 		return nil
 	},
 }
@@ -51,9 +64,5 @@ var stopCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(stopCmd)
 
-	// Add flags matching Python version
-	stopCmd.Flags().StringVarP(&stopService, "service", "s", "",
-		"service [etcd|mygrid_service|portal|dog|txpool|controller|compute]]")
-	stopCmd.Flags().BoolVarP(&stopForce, "force", "f", false,
-		"Force stop")
+	stopCmd.Flags().BoolVarP(&stopForce, "force", "f", false, "Force stop with SIGKILL")
 }

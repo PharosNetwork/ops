@@ -2,31 +2,24 @@ package cmd
 
 import (
 	"fmt"
-
-	"pharos-ops/pkg/utils"
+	"os"
 
 	"github.com/spf13/cobra"
 )
 
-var (
-	debug   bool
-	rootCmd = &cobra.Command{
-		Use:   "pharos-ops",
-		Short: "Pharos blockchain operations tool",
-		Long:  "A comprehensive tool for managing Pharos blockchain networks",
-		PersistentPreRun: func(cmd *cobra.Command, args []string) {
-			if debug {
-				fmt.Println("Debug mode is on")
-				utils.SetDebug(true)
-			}
-		},
-	}
-)
+var rootCmd = &cobra.Command{
+	Use:   "pharos-ops",
+	Short: "Pharos operations tool",
+	Long:  "A simplified operations tool for Pharos blockchain deployment and management",
+}
 
-func Execute() error {
-	return rootCmd.Execute()
+func Execute() {
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 }
 
 func init() {
-	rootCmd.PersistentFlags().BoolVar(&debug, "debug", false, "Enable debug mode")
+	// Global flags can be added here if needed
 }
