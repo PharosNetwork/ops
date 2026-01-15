@@ -181,7 +181,6 @@ var addValidatorCmd = &cobra.Command{
 			fmt.Println("Validator register failed")
 		}
 
-		fmt.Printf("Validator register receipt: %+v\n", receipt)
 		return nil
 	},
 }
@@ -310,7 +309,6 @@ var exitValidatorCmd = &cobra.Command{
 			fmt.Println("Validator exit failed")
 		}
 
-		fmt.Printf("Validator exit receipt: %+v\n", receipt)
 		return nil
 	},
 }
