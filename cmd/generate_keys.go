@@ -112,27 +112,21 @@ func generateBLS12381Key(outputDir string, passwd string) error {
 		return fmt.Errorf("failed to execute pharos_cli: %w, output: %s", err, string(output))
 	}
 
-	// Debug: print raw output
-	fmt.Printf("DEBUG: pharos_cli output:\n%s\n", string(output))
-
 	// Parse output to extract keys
 	// Expected format:
-	// prikey:0x400238d28e50623cba45dfd569ac65d51905b2f6ffbe791ac086df191922ffcb588b
-	// pubkey:0x400389d3bfe4256ace7d4db0d1a9ca5add712553490fc8298a3cd2c43e1b0004f21598df06655cdc514e73f21b01d9c23b82
+	// PRIVKEY:0x40021edc8359ca9e50a8d1966138af78d5333781c0eace4d5470222b7550b44adb3e
+	// PUBKEY:0x40038a5de752fbc517e7cd96e04b8ed2035261a72ce5579c0d3ae22a97959336956a2a223fdc5417887110684624d2713ea9
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 
 	var prikey, pubkey string
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "prikey:") {
-			prikey = strings.TrimSpace(strings.TrimPrefix(line, "prikey:"))
-		} else if strings.HasPrefix(line, "pubkey:") {
-			pubkey = strings.TrimSpace(strings.TrimPrefix(line, "pubkey:"))
+		if strings.HasPrefix(line, "PRIVKEY:") {
+			prikey = strings.TrimSpace(strings.TrimPrefix(line, "PRIVKEY:"))
+		} else if strings.HasPrefix(line, "PUBKEY:") {
+			pubkey = strings.TrimSpace(strings.TrimPrefix(line, "PUBKEY:"))
 		}
 	}
-
-	fmt.Printf("DEBUG: parsed prikey: %s\n", prikey)
-	fmt.Printf("DEBUG: parsed pubkey: %s\n", pubkey)
 
 	if prikey == "" || pubkey == "" {
 		return fmt.Errorf("failed to parse BLS keys from pharos_cli output: prikey=%q, pubkey=%q", prikey, pubkey)
