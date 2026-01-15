@@ -142,7 +142,7 @@ Register your node as a validator on the network:
 
 ```bash
 ./pharos-ops add-validator \
-  --key <PRIVATE_KEY> \
+  --key YOUR_PRIVATE_KEY_HERE \
   --domain-label my-validator \
   --domain-endpoint http://47.84.7.245:19000 \
   --stake 1000000
@@ -150,8 +150,6 @@ Register your node as a validator on the network:
 
 **Required Parameters:**
 - `--key` - Private key for transaction signing (hex format, no 0x prefix)
-- `--domain-label` - Validator name/description
-- `--domain-endpoint` - Your validator's public endpoint URL
 
 **Optional Parameters:**
 - `--rpc-endpoint` - RPC endpoint to send transaction (default: `http://127.0.0.1:18100`)
@@ -162,8 +160,8 @@ Register your node as a validator on the network:
 **Example:**
 ```bash
 ./pharos-ops add-validator \
-  --rpc-endpoint https://atlantic.dplabs-internal.com \
-  --key fcfc69bd0056a2592e1f46cfba8264d8918fe98ecf5a2ef43aaa4ed1463725e1 \
+  --rpc-endpoint http://127.0.0.1:18100 \
+  --key YOUR_PRIVATE_KEY_HERE \
   --domain-label golang-validator \
   --domain-endpoint http://127.0.0.1:19000 \
   --stake 10000000
@@ -185,7 +183,7 @@ Request to exit from the validator set:
 
 ```bash
 ./pharos-ops exit-validator \
-  --key <PRIVATE_KEY>
+  --key YOUR_PRIVATE_KEY_HERE
 ```
 
 **Required Parameters:**
@@ -198,8 +196,8 @@ Request to exit from the validator set:
 **Example:**
 ```bash
 ./pharos-ops exit-validator \
-  --rpc-endpoint https://atlantic.dplabs-internal.com \
-  --key fcfc69bd0056a2592e1f46cfba8264d8918fe98ecf5a2ef43aaa4ed1463725e1
+  --rpc-endpoint http://127.0.0.1:18100 \
+  --key YOUR_PRIVATE_KEY_HERE
 ```
 
 **Output:**
@@ -236,42 +234,11 @@ PUBLIC_IP=$(curl -s ifconfig.me)
 
 # 6. Register as validator (optional)
 ./pharos-ops add-validator \
-  --rpc-endpoint https://network-rpc.example.com \
-  --key <YOUR_PRIVATE_KEY> \
+  --rpc-endpoint http://127.0.0.1:18100 \
+  --key YOUR_PRIVATE_KEY_HERE \
   --domain-label my-validator \
   --domain-endpoint http://$PUBLIC_IP:19000 \
   --stake 1000000
-```
-
-### Automated Deployment Script
-
-```bash
-#!/bin/bash
-set -e
-
-echo "=== Pulling latest code ==="
-cd /path/to/ops/
-git pull
-
-echo "=== Building binary ==="
-GOOS=linux GOARCH=amd64 go build -o pharos-ops
-
-echo "=== Copying to deployment directory ==="
-cp pharos-ops /data/deployment/
-
-echo "=== Setting IP ==="
-cd /data/deployment/
-PUBLIC_IP=$(curl -s ifconfig.me)
-echo "Public IP: $PUBLIC_IP"
-./pharos-ops set-ip $PUBLIC_IP
-
-echo "=== Bootstrapping ==="
-./pharos-ops bootstrap
-
-echo "=== Starting node ==="
-./pharos-ops start
-
-echo "=== Deployment complete ==="
 ```
 
 ## Command Reference
@@ -336,23 +303,23 @@ echo "=== Deployment complete ==="
 **domain.key** (Prime256v1 encrypted private key):
 ```
 -----BEGIN ENCRYPTED PRIVATE KEY-----
-MIHsMFcGCSqGSIb3DQEFDTBKMCkGCSqGSIb3DQEFDDA...
+...PEM format encrypted private key...
 -----END ENCRYPTED PRIVATE KEY-----
 ```
 
 **domain.pub** (Prime256v1 public key):
 ```
-100304284fc6bccd20ada2e8a31525348b33a98b9e88ef7727c512b6bfad5caabc872248077d66fea399a17599e34aad72fa51ea189e2c21a2f70e5d05a2a45f8b892c
+1003<64_hex_characters>
 ```
 
 **stabilizing.key** (BLS12381 private key):
 ```
-0x400238d28e50623cba45dfd569ac65d51905b2f6ffbe791ac086df191922ffcb588b
+0x<hex_string>
 ```
 
 **stabilizing.pub** (BLS12381 public key):
 ```
-0x400389d3bfe4256ace7d4db0d1a9ca5add712553490fc8298a3cd2c43e1b0004f21598df06655cdc514e73f21b01d9c23b82
+0x<hex_string>
 ```
 
 ## Troubleshooting
@@ -417,4 +384,4 @@ Pharos Labs proprietary/confidential.
 
 For issues and questions:
 - GitHub Issues: https://github.com/PharosNetwork/ops/issues
-- Documentation: https://docs.pharos.network
+- Documentation: https://docs.pharosnetwork.xyz
