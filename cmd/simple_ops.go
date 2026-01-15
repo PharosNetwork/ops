@@ -31,20 +31,46 @@ func BootstrapSimple() error {
 		return fmt.Errorf("config file not found: %s", pharosConfFile)
 	}
 
-	// Check if pharos_light binary exists
-	pharosLight := filepath.Join(binDir, "pharos_light")
-	if _, err := os.Stat(pharosLight); os.IsNotExist(err) {
-		return fmt.Errorf("pharos_light binary not found: %s", pharosLight)
+	// Get genesis.conf path
+	genesisFile, err := filepath.Abs("../genesis.conf")
+	if err != nil {
+		return fmt.Errorf("failed to get genesis.conf path: %w", err)
+	}
+
+	// Check if genesis.conf exists
+	if _, err := os.Stat(genesisFile); os.IsNotExist(err) {
+		return fmt.Errorf("genesis file not found: %s", genesisFile)
+	}
+
+	// Check if pharos_cli binary exists
+	pharosCli := filepath.Join(binDir, "pharos_cli")
+	if _, err := os.Stat(pharosCli); os.IsNotExist(err) {
+		return fmt.Errorf("pharos_cli binary not found: %s", pharosCli)
+	}
+
+	// Check if libevmone.so exists
+	evmoneSo := filepath.Join(binDir, "libevmone.so")
+	hasEvmone := true
+	if _, err := os.Stat(evmoneSo); os.IsNotExist(err) {
+		hasEvmone = false
 	}
 
 	// Run bootstrap genesis command
-	// pharos_light genesis -c ../conf/pharos.conf
-	cmd := exec.Command(pharosLight, "genesis", "-c", pharosConfFile)
-	cmd.Dir = binDir
+	// pharos_cli genesis -g ../genesis.conf -c ../conf/pharos.conf
+	var cmd *exec.Cmd
+	if hasEvmone {
+		cmdStr := fmt.Sprintf("cd %s && LD_PRELOAD=./libevmone.so ./pharos_cli genesis -g %s -c %s", binDir, genesisFile, pharosConfFile)
+		cmd = exec.Command("bash", "-c", cmdStr)
+		utils.Info("Running: %s", cmdStr)
+	} else {
+		cmd = exec.Command(pharosCli, "genesis", "-g", genesisFile, "-c", pharosConfFile)
+		cmd.Dir = binDir
+		utils.Info("Running: %s genesis -g %s -c %s", pharosCli, genesisFile, pharosConfFile)
+	}
+
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	utils.Info("Running: %s genesis -c %s", pharosLight, pharosConfFile)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("bootstrap failed: %w", err)
 	}

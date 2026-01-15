@@ -76,60 +76,29 @@ var encodeKeyToConfCmd = &cobra.Command{
 		}
 
 		// Navigate to the correct location and update the key
-		// Format: {"aldaba": {"startup_config": {"init_config": {...}}}}
+		// Format: {"aldaba": {"secret_config": {"domain_key": "", "stabilizing_key": ""}}}
 		aldaba, ok := pharosConf["aldaba"].(map[string]interface{})
 		if !ok {
 			return fmt.Errorf("aldaba not found in pharos.conf")
 		}
 
-		startupConfig, ok := aldaba["startup_config"].(map[string]interface{})
-		if !ok {
-			return fmt.Errorf("startup_config not found in aldaba")
-		}
-
-		initConfig, ok := startupConfig["init_config"].(map[string]interface{})
-		if !ok {
-			return fmt.Errorf("init_config not found in startup_config")
+		// Get or create secret_config
+		var secretConfig map[string]interface{}
+		if sc, ok := aldaba["secret_config"].(map[string]interface{}); ok {
+			secretConfig = sc
+		} else {
+			secretConfig = make(map[string]interface{})
+			aldaba["secret_config"] = secretConfig
 		}
 
 		// Update the appropriate key based on key type
 		switch encodeKeyType {
 		case "domain":
-			// Update domain key
-			if secret, ok := initConfig["secret"].(map[string]interface{}); ok {
-				if domain, ok := secret["domain"].(map[string]interface{}); ok {
-					domain["key"] = encoded
-					utils.Info("Updated domain key in pharos.conf")
-				} else {
-					// Create domain section
-					secret["domain"] = map[string]interface{}{"key": encoded}
-					utils.Info("Created domain key in pharos.conf")
-				}
-			} else {
-				// Create secret.domain section
-				initConfig["secret"] = map[string]interface{}{
-					"domain": map[string]interface{}{"key": encoded},
-				}
-				utils.Info("Created secret.domain.key in pharos.conf")
-			}
+			secretConfig["domain_key"] = encoded
+			utils.Info("Updated domain_key in pharos.conf")
 		case "stabilizing":
-			// Update stabilizing key
-			if secret, ok := initConfig["secret"].(map[string]interface{}); ok {
-				if stabilizing, ok := secret["stabilizing"].(map[string]interface{}); ok {
-					stabilizing["key"] = encoded
-					utils.Info("Updated stabilizing key in pharos.conf")
-				} else {
-					// Create stabilizing section
-					secret["stabilizing"] = map[string]interface{}{"key": encoded}
-					utils.Info("Created stabilizing key in pharos.conf")
-				}
-			} else {
-				// Create secret.stabilizing section
-				initConfig["secret"] = map[string]interface{}{
-					"stabilizing": map[string]interface{}{"key": encoded},
-				}
-				utils.Info("Created secret.stabilizing.key in pharos.conf")
-			}
+			secretConfig["stabilizing_key"] = encoded
+			utils.Info("Updated stabilizing_key in pharos.conf")
 		default:
 			return fmt.Errorf("unknown key type: %s (must be 'domain' or 'stabilizing')", encodeKeyType)
 		}

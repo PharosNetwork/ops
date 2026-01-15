@@ -78,7 +78,7 @@ func generatePrime256v1Key(outputDir string, passwd string) error {
 	}
 
 	// Write private key
-	keyPath := filepath.Join(outputDir, "new.key")
+	keyPath := filepath.Join(outputDir, "domain.key")
 	keyFile, err := os.Create(keyPath)
 	if err != nil {
 		return fmt.Errorf("failed to create key file: %w", err)
@@ -101,7 +101,7 @@ func generatePrime256v1Key(outputDir string, passwd string) error {
 		Bytes: pubBytes,
 	}
 
-	pubPath := filepath.Join(outputDir, "new.pub")
+	pubPath := filepath.Join(outputDir, "domain.pub")
 	pubFile, err := os.Create(pubPath)
 	if err != nil {
 		return fmt.Errorf("failed to create pub file: %w", err)
@@ -118,8 +118,8 @@ func generatePrime256v1Key(outputDir string, passwd string) error {
 
 func generateBLS12381Key(outputDir string, passwd string) error {
 	// Try to use pharos_cli to generate BLS key if available
-	blsKeyPath := filepath.Join(outputDir, "bls_new.key")
-	blsPubPath := filepath.Join(outputDir, "bls_new.pub")
+	blsKeyPath := filepath.Join(outputDir, "stabilizing.key")
+	blsPubPath := filepath.Join(outputDir, "stabilizing.pub")
 
 	// Check if pharos_cli exists
 	pharosCli := "../bin/pharos_cli"
