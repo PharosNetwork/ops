@@ -99,15 +99,17 @@ var addValidatorCmd = &cobra.Command{
 			return fmt.Errorf("failed to create transactor: %w", err)
 		}
 
-		// Parse stake value
+		// Parse stake value (in tokens, will convert to wei)
 		var stakeValue *big.Int
 		if validatorStake != "" {
-			stakeValue, ok = new(big.Int).SetString(validatorStake, 10)
+			stakeTokens, ok := new(big.Int).SetString(validatorStake, 10)
 			if !ok {
 				return fmt.Errorf("invalid stake value: %s", validatorStake)
 			}
+			// Convert tokens to wei (1 token = 10^18 wei)
+			stakeValue = new(big.Int).Mul(stakeTokens, big.NewInt(1e18))
 		} else {
-			// Default: 1,000,000 tokens (1,000,000 * 10^18 wei)
+			// Default: 1,000,000 tokens
 			stakeValue = new(big.Int).Mul(big.NewInt(1000000), big.NewInt(1e18))
 		}
 
@@ -115,7 +117,7 @@ var addValidatorCmd = &cobra.Command{
 		auth.Value = stakeValue
 		auth.GasPrice = big.NewInt(1000000000) // 1 Gwei
 
-		fmt.Printf("Stake amount: %s wei (%s tokens)\n", stakeValue.String(), new(big.Int).Div(stakeValue, big.NewInt(1e18)).String())
+		fmt.Printf("Stake amount: %s tokens (%s wei)\n", new(big.Int).Div(stakeValue, big.NewInt(1e18)).String(), stakeValue.String())
 
 		// Get nonce
 		nonce, err := client.PendingNonceAt(cmd.Context(), auth.From)
@@ -332,7 +334,7 @@ func init() {
 	// add-validator flags
 	addValidatorCmd.Flags().StringVar(&validatorEndpoint, "endpoint", "http://127.0.0.1:18100", "RPC endpoint URL")
 	addValidatorCmd.Flags().StringVar(&validatorKey, "key", "", "Private key for transaction signing (required)")
-	addValidatorCmd.Flags().StringVar(&validatorStake, "stake", "", "Stake amount in wei (default: 1000000000000000000000000 = 1,000,000 tokens)")
+	addValidatorCmd.Flags().StringVar(&validatorStake, "stake", "", "Stake amount in tokens (default: 1000000 tokens)")
 	addValidatorCmd.Flags().StringVar(&domainLabel, "domain-label", "", "Domain label/description")
 	addValidatorCmd.Flags().StringVar(&domainEndpoint, "domain-endpoint", "", "Domain endpoint URL")
 	addValidatorCmd.Flags().StringVar(&domainPubKeyPath, "domain-pubkey", "./keys/domain.pub", "Path to domain public key file")
