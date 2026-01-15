@@ -24,7 +24,7 @@ const (
 )
 
 var (
-	validatorEndpoint     string
+	validatorRPCEndpoint  string
 	validatorKey          string
 	validatorStake        string
 	domainLabel           string
@@ -34,9 +34,9 @@ var (
 )
 
 var (
-	exitValidatorEndpoint string
-	exitValidatorKey      string
-	exitDomainPubKeyPath  string
+	exitValidatorRPCEndpoint string
+	exitValidatorKey         string
+	exitDomainPubKeyPath     string
 )
 
 var addValidatorCmd = &cobra.Command{
@@ -64,7 +64,7 @@ var addValidatorCmd = &cobra.Command{
 		}
 
 		// Connect to Ethereum client
-		client, err := ethclient.Dial(validatorEndpoint)
+		client, err := ethclient.Dial(validatorRPCEndpoint)
 		if err != nil {
 			return fmt.Errorf("failed to connect to endpoint: %w", err)
 		}
@@ -225,7 +225,7 @@ var exitValidatorCmd = &cobra.Command{
 		fmt.Printf("Pool ID: %s\n", hex.EncodeToString(poolID[:]))
 
 		// Connect to Ethereum client
-		client, err := ethclient.Dial(exitValidatorEndpoint)
+		client, err := ethclient.Dial(exitValidatorRPCEndpoint)
 		if err != nil {
 			return fmt.Errorf("failed to connect to endpoint: %w", err)
 		}
@@ -332,7 +332,7 @@ func init() {
 	rootCmd.AddCommand(exitValidatorCmd)
 
 	// add-validator flags
-	addValidatorCmd.Flags().StringVar(&validatorEndpoint, "endpoint", "http://127.0.0.1:18100", "RPC endpoint URL")
+	addValidatorCmd.Flags().StringVar(&validatorRPCEndpoint, "rpc-endpoint", "http://127.0.0.1:18100", "RPC endpoint URL")
 	addValidatorCmd.Flags().StringVar(&validatorKey, "key", "", "Private key for transaction signing (required)")
 	addValidatorCmd.Flags().StringVar(&validatorStake, "stake", "", "Stake amount in tokens (default: 1000000 tokens)")
 	addValidatorCmd.Flags().StringVar(&domainLabel, "domain-label", "", "Domain label/description")
@@ -345,7 +345,7 @@ func init() {
 	addValidatorCmd.MarkFlagRequired("domain-endpoint")
 
 	// exit-validator flags
-	exitValidatorCmd.Flags().StringVar(&exitValidatorEndpoint, "endpoint", "http://127.0.0.1:18100", "RPC endpoint URL")
+	exitValidatorCmd.Flags().StringVar(&exitValidatorRPCEndpoint, "rpc-endpoint", "http://127.0.0.1:18100", "RPC endpoint URL")
 	exitValidatorCmd.Flags().StringVar(&exitValidatorKey, "key", "", "Private key for transaction signing (required)")
 	exitValidatorCmd.Flags().StringVar(&exitDomainPubKeyPath, "domain-pubkey", "./keys/domain.pub", "Path to domain public key file")
 
