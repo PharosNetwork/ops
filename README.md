@@ -144,12 +144,14 @@ Register your node as a validator on the network:
 ./pharos-ops add-validator \
   --key YOUR_PRIVATE_KEY_HERE \
   --domain-label my-validator \
-  --domain-endpoint http://47.84.7.245:19000 \
+  --domain-endpoint tcp://47.84.7.245:19000 \
   --stake 1000000
 ```
 
 **Required Parameters:**
 - `--key` - Private key for transaction signing (hex format, no 0x prefix)
+- `--domain-label` - Validator name/description
+- `--domain-endpoint` - Your validator's public endpoint URL (must include protocol, e.g., `tcp://IP:PORT`)
 
 **Optional Parameters:**
 - `--rpc-endpoint` - RPC endpoint to send transaction (default: `http://127.0.0.1:18100`)
@@ -163,7 +165,7 @@ Register your node as a validator on the network:
   --rpc-endpoint http://127.0.0.1:18100 \
   --key YOUR_PRIVATE_KEY_HERE \
   --domain-label golang-validator \
-  --domain-endpoint http://127.0.0.1:19000 \
+  --domain-endpoint tcp://127.0.0.1:19000 \
   --stake 10000000
 ```
 
@@ -237,7 +239,7 @@ PUBLIC_IP=$(curl -s ifconfig.me)
   --rpc-endpoint http://127.0.0.1:18100 \
   --key YOUR_PRIVATE_KEY_HERE \
   --domain-label my-validator \
-  --domain-endpoint http://$PUBLIC_IP:19000 \
+  --domain-endpoint tcp://$PUBLIC_IP:19000 \
   --stake 1000000
 ```
 
@@ -323,6 +325,17 @@ PUBLIC_IP=$(curl -s ifconfig.me)
 ```
 
 ## Troubleshooting
+
+### Domain endpoint protocol
+
+**Problem:** Validator registration fails or other nodes cannot connect to your validator.
+
+**Solution:** Ensure `--domain-endpoint` includes the correct protocol prefix:
+- ✅ Correct: `tcp://127.0.0.1:19000`
+- ❌ Wrong: `http://127.0.0.1:19000`
+- ❌ Wrong: `127.0.0.1:19000`
+
+The domain endpoint uses TCP protocol for P2P communication, not HTTP.
 
 ### pharos_cli not found
 
