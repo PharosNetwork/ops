@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"crypto/ecdsa"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -29,6 +30,12 @@ var (
 	domainEndpoint        string
 	domainPubKeyPath      string
 	stabilizingPubKeyPath string
+)
+
+var (
+	exitValidatorEndpoint string
+	exitValidatorKey      string
+	exitDomainPubKeyPath  string
 )
 
 var addValidatorCmd = &cobra.Command{
@@ -69,6 +76,15 @@ var addValidatorCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("failed to load private key: %w", err)
 		}
+
+		// Get account address from private key
+		publicKey := privateKey.Public()
+		publicKeyECDSA, ok := publicKey.(*ecdsa.PublicKey)
+		if !ok {
+			return fmt.Errorf("failed to get public key")
+		}
+		accountAddress := crypto.PubkeyToAddress(*publicKeyECDSA)
+		fmt.Printf("Account address: %s\n", accountAddress.Hex())
 
 		// Get chain ID
 		chainID, err := client.ChainID(cmd.Context())
@@ -162,8 +178,23 @@ var exitValidatorCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Println("Exiting validator...")
 
+		// Load private key first to get account address
+		privateKey, err := crypto.HexToECDSA(exitValidatorKey)
+		if err != nil {
+			return fmt.Errorf("failed to load private key: %w", err)
+		}
+
+		// Get account address from private key
+		publicKey := privateKey.Public()
+		publicKeyECDSA, ok := publicKey.(*ecdsa.PublicKey)
+		if !ok {
+			return fmt.Errorf("failed to get public key")
+		}
+		accountAddress := crypto.PubkeyToAddress(*publicKeyECDSA)
+		fmt.Printf("Account address: %s\n", accountAddress.Hex())
+
 		// Read domain public key
-		domainPubKey, err := readPublicKey(domainPubKeyPath)
+		domainPubKey, err := readPublicKey(exitDomainPubKeyPath)
 		if err != nil {
 			return fmt.Errorf("failed to read domain public key: %w", err)
 		}
@@ -178,19 +209,13 @@ var exitValidatorCmd = &cobra.Command{
 		fmt.Printf("Pool ID: %s\n", hex.EncodeToString(poolID[:]))
 
 		// Connect to Ethereum client
-		client, err := ethclient.Dial(validatorEndpoint)
+		client, err := ethclient.Dial(exitValidatorEndpoint)
 		if err != nil {
 			return fmt.Errorf("failed to connect to endpoint: %w", err)
 		}
 		defer client.Close()
 
 		fmt.Println("Connected to endpoint")
-
-		// Load private key
-		privateKey, err := crypto.HexToECDSA(validatorKey)
-		if err != nil {
-			return fmt.Errorf("failed to load private key: %w", err)
-		}
 
 		// Get chain ID
 		chainID, err := client.ChainID(cmd.Context())
@@ -292,21 +317,21 @@ func init() {
 	rootCmd.AddCommand(exitValidatorCmd)
 
 	// add-validator flags
-	addValidatorCmd.Flags().StringVar(&validatorEndpoint, "endpoint", "", "RPC endpoint URL")
-	addValidatorCmd.Flags().StringVar(&validatorKey, "key", "fcfc69bd0056a2592e1f46cfba8264d8918fe98ecf5a2ef43aaa4ed1463725e1", "Private key for transaction signing")
+	addValidatorCmd.Flags().StringVar(&validatorEndpoint, "endpoint", "http://127.0.0.1:18100", "RPC endpoint URL")
+	addValidatorCmd.Flags().StringVar(&validatorKey, "key", "", "Private key for transaction signing (required)")
 	addValidatorCmd.Flags().StringVar(&domainLabel, "domain-label", "", "Domain label/description")
 	addValidatorCmd.Flags().StringVar(&domainEndpoint, "domain-endpoint", "", "Domain endpoint URL")
 	addValidatorCmd.Flags().StringVar(&domainPubKeyPath, "domain-pubkey", "./keys/domain.pub", "Path to domain public key file")
 	addValidatorCmd.Flags().StringVar(&stabilizingPubKeyPath, "stabilizing-pubkey", "./keys/stabilizing.pub", "Path to stabilizing public key file")
 
-	addValidatorCmd.MarkFlagRequired("endpoint")
+	addValidatorCmd.MarkFlagRequired("key")
 	addValidatorCmd.MarkFlagRequired("domain-label")
 	addValidatorCmd.MarkFlagRequired("domain-endpoint")
 
 	// exit-validator flags
-	exitValidatorCmd.Flags().StringVar(&validatorEndpoint, "endpoint", "", "RPC endpoint URL")
-	exitValidatorCmd.Flags().StringVar(&validatorKey, "key", "fcfc69bd0056a2592e1f46cfba8264d8918fe98ecf5a2ef43aaa4ed1463725e1", "Private key for transaction signing")
-	exitValidatorCmd.Flags().StringVar(&domainPubKeyPath, "domain-pubkey", "./keys/domain.pub", "Path to domain public key file")
+	exitValidatorCmd.Flags().StringVar(&exitValidatorEndpoint, "endpoint", "http://127.0.0.1:18100", "RPC endpoint URL")
+	exitValidatorCmd.Flags().StringVar(&exitValidatorKey, "key", "", "Private key for transaction signing (required)")
+	exitValidatorCmd.Flags().StringVar(&exitDomainPubKeyPath, "domain-pubkey", "./keys/domain.pub", "Path to domain public key file")
 
-	exitValidatorCmd.MarkFlagRequired("endpoint")
+	exitValidatorCmd.MarkFlagRequired("key")
 }
