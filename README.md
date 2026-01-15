@@ -151,7 +151,9 @@ Register your node as a validator on the network:
 **Required Parameters:**
 - `--key` - Private key for transaction signing (hex format, no 0x prefix)
 - `--domain-label` - Validator name/description
-- `--domain-endpoint` - Your validator's public endpoint URL (must include protocol, e.g., `tcp://IP:PORT`)
+- `--domain-endpoint` - Your validator's public endpoint URL
+  - For IP:PORT format: must use `tcp://` prefix (e.g., `tcp://127.0.0.1:19000`)
+  - For domain names: can use any protocol (e.g., `https://pharos.validator.com`)
 
 **Optional Parameters:**
 - `--rpc-endpoint` - RPC endpoint to send transaction (default: `http://127.0.0.1:18100`)
@@ -330,12 +332,20 @@ PUBLIC_IP=$(curl -s ifconfig.me)
 
 **Problem:** Validator registration fails or other nodes cannot connect to your validator.
 
-**Solution:** Ensure `--domain-endpoint` includes the correct protocol prefix:
+**Solution:** Ensure `--domain-endpoint` uses the correct format:
+
+**For IP address + port:**
 - ✅ Correct: `tcp://127.0.0.1:19000`
+- ✅ Correct: `tcp://47.84.7.245:19000`
 - ❌ Wrong: `http://127.0.0.1:19000`
 - ❌ Wrong: `127.0.0.1:19000`
 
-The domain endpoint uses TCP protocol for P2P communication, not HTTP.
+**For domain names:**
+- ✅ Correct: `https://pharos.validator.com`
+- ✅ Correct: `http://pharos.validator.com`
+- ✅ Correct: `tcp://pharos.validator.com:19000`
+
+**Rule:** When using IP:PORT format, you must use `tcp://` prefix. Domain names can use any protocol.
 
 ### pharos_cli not found
 
