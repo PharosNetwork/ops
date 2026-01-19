@@ -52,7 +52,6 @@ For Docker deployment, use CONSENSUS_KEY_PWD environment variable instead.`,
 		}
 
 		fmt.Println("Password saved successfully")
-		fmt.Printf("Password file: %s\n", passwordFile)
 		return nil
 	},
 }

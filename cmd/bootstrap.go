@@ -8,6 +8,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var (
+	bootstrapConfigPath string
+)
+
 var bootstrapCmd = &cobra.Command{
 	Use:   "bootstrap",
 	Short: "Bootstrap pharos domain",
@@ -22,9 +26,8 @@ var bootstrapCmd = &cobra.Command{
 		}
 
 		// Check if pharos.conf exists
-		pharosConfFile := "./conf/pharos.conf"
-		if _, err := os.Stat(pharosConfFile); os.IsNotExist(err) {
-			return fmt.Errorf("config file not found: %s", pharosConfFile)
+		if _, err := os.Stat(bootstrapConfigPath); os.IsNotExist(err) {
+			return fmt.Errorf("config file not found: %s", bootstrapConfigPath)
 		}
 
 		// Check if pharos_cli binary exists
@@ -44,9 +47,9 @@ var bootstrapCmd = &cobra.Command{
 		// pharos_cli genesis -g ./genesis.conf -c ./conf/pharos.conf
 		var cmdStr string
 		if hasEvmone {
-			cmdStr = fmt.Sprintf("cd ./bin && LD_PRELOAD=./libevmone.so ./pharos_cli genesis -g ../genesis.conf -c ../conf/pharos.conf")
+			cmdStr = fmt.Sprintf("cd ./bin && LD_PRELOAD=./libevmone.so ./pharos_cli genesis -g ../genesis.conf -c %s", bootstrapConfigPath)
 		} else {
-			cmdStr = fmt.Sprintf("cd ./bin && ./pharos_cli genesis -g ../genesis.conf -c ../conf/pharos.conf")
+			cmdStr = fmt.Sprintf("cd ./bin && ./pharos_cli genesis -g ../genesis.conf -c %s", bootstrapConfigPath)
 		}
 
 		fmt.Printf("Running: %s\n", cmdStr)
@@ -66,4 +69,6 @@ var bootstrapCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(bootstrapCmd)
+
+	bootstrapCmd.Flags().StringVar(&bootstrapConfigPath, "config", "./conf/pharos.conf", "Path to pharos.conf file")
 }
