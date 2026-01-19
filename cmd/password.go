@@ -11,7 +11,7 @@ import (
 
 const (
 	passwordFile = "./conf/.password"
-	passwordEnv  = "PHAROS_PASSWORD"
+	passwordEnv  = "CONSENSUS_KEY_PWD"
 )
 
 var setPasswordCmd = &cobra.Command{
@@ -19,7 +19,7 @@ var setPasswordCmd = &cobra.Command{
 	Short: "Set password for pharos node",
 	Long: `Set password for pharos node. 
 The password will be saved to ./conf/.password for binary deployment.
-For Docker deployment, use PHAROS_PASSWORD environment variable instead.`,
+For Docker deployment, use CONSENSUS_KEY_PWD environment variable instead.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		var password string

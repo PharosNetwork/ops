@@ -8,6 +8,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var (
+	startConfigPath string
+)
+
 var startCmd = &cobra.Command{
 	Use:   "start",
 	Short: "Start pharos services",
@@ -16,9 +20,8 @@ var startCmd = &cobra.Command{
 		fmt.Println("Starting services")
 
 		// Check if pharos.conf exists
-		pharosConfFile := "./conf/pharos.conf"
-		if _, err := os.Stat(pharosConfFile); os.IsNotExist(err) {
-			return fmt.Errorf("config file not found: %s", pharosConfFile)
+		if _, err := os.Stat(startConfigPath); os.IsNotExist(err) {
+			return fmt.Errorf("config file not found: %s", startConfigPath)
 		}
 
 		// Check if pharos_light binary exists
@@ -34,12 +37,21 @@ var startCmd = &cobra.Command{
 			hasEvmone = false
 		}
 
+		// Get password and set environment variable
+		password, err := GetPassword()
+		if err != nil {
+			fmt.Printf("Warning: %v\n", err)
+			fmt.Println("Starting without password. Set password with: ./ops set-password <password>")
+		} else {
+			fmt.Println("Using saved password")
+		}
+
 		// Build command
 		var cmdStr string
 		if hasEvmone {
-			cmdStr = "cd ./bin && LD_PRELOAD=./libevmone.so ./pharos_light -c ../conf/pharos.conf -d"
+			cmdStr = fmt.Sprintf("cd ./bin && LD_PRELOAD=./libevmone.so ./pharos_light -c %s -d", startConfigPath)
 		} else {
-			cmdStr = "cd ./bin && ./pharos_light -c ../conf/pharos.conf -d"
+			cmdStr = fmt.Sprintf("cd ./bin && ./pharos_light -c %s -d", startConfigPath)
 		}
 
 		fmt.Printf("Starting pharos_light: %s\n", cmdStr)
@@ -47,6 +59,11 @@ var startCmd = &cobra.Command{
 		execCmd := exec.Command("bash", "-c", cmdStr)
 		execCmd.Stdout = os.Stdout
 		execCmd.Stderr = os.Stderr
+
+		// Set password environment variable if available
+		if password != "" {
+			execCmd.Env = append(os.Environ(), fmt.Sprintf("CONSENSUS_KEY_PWD=%s", password))
+		}
 
 		if err := execCmd.Start(); err != nil {
 			return fmt.Errorf("failed to start services: %w", err)
@@ -59,4 +76,6 @@ var startCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(startCmd)
+
+	startCmd.Flags().StringVar(&startConfigPath, "config", "./conf/pharos.conf", "Path to pharos.conf file")
 }
