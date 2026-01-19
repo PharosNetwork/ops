@@ -67,9 +67,12 @@ var startCmd = &cobra.Command{
 		execCmd.Stdout = os.Stdout
 		execCmd.Stderr = os.Stderr
 
-		// Set password environment variable if available
+		// Set password environment variables if available
 		if password != "" {
-			execCmd.Env = append(os.Environ(), fmt.Sprintf("CONSENSUS_KEY_PWD=%s", password))
+			execCmd.Env = append(os.Environ(),
+				fmt.Sprintf("CONSENSUS_KEY_PWD=%s", password),
+				fmt.Sprintf("PORTAL_SSL_PWD=%s", password),
+			)
 		}
 
 		if err := execCmd.Start(); err != nil {
