@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	passwordFile = "./conf/.password"
+	passwordFile = "./.password"
 	passwordEnv  = "CONSENSUS_KEY_PWD"
 )
 
