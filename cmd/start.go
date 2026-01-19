@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 )
@@ -18,6 +19,12 @@ var startCmd = &cobra.Command{
 	Long:  "Start pharos_light service in daemon mode",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Println("Starting services")
+
+		// Convert config path to absolute path
+		absConfigPath, err := filepath.Abs(startConfigPath)
+		if err != nil {
+			return fmt.Errorf("failed to get absolute path for config: %w", err)
+		}
 
 		// Check if pharos.conf exists
 		if _, err := os.Stat(startConfigPath); os.IsNotExist(err) {
@@ -49,9 +56,9 @@ var startCmd = &cobra.Command{
 		// Build command
 		var cmdStr string
 		if hasEvmone {
-			cmdStr = fmt.Sprintf("cd ./bin && LD_PRELOAD=./libevmone.so ./pharos_light -c %s -d", startConfigPath)
+			cmdStr = fmt.Sprintf("cd ./bin && LD_PRELOAD=./libevmone.so ./pharos_light -c %s -d", absConfigPath)
 		} else {
-			cmdStr = fmt.Sprintf("cd ./bin && ./pharos_light -c %s -d", startConfigPath)
+			cmdStr = fmt.Sprintf("cd ./bin && ./pharos_light -c %s -d", absConfigPath)
 		}
 
 		fmt.Printf("Starting pharos_light: %s\n", cmdStr)

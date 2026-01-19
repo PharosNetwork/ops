@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 )
@@ -19,10 +20,22 @@ var bootstrapCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Println("Starting bootstrap")
 
+		// Convert config path to absolute path
+		absConfigPath, err := filepath.Abs(bootstrapConfigPath)
+		if err != nil {
+			return fmt.Errorf("failed to get absolute path for config: %w", err)
+		}
+
 		// Check if genesis.conf exists
 		genesisFile := "./genesis.conf"
 		if _, err := os.Stat(genesisFile); os.IsNotExist(err) {
 			return fmt.Errorf("genesis file not found: %s", genesisFile)
+		}
+
+		// Get absolute path for genesis.conf
+		absGenesisPath, err := filepath.Abs(genesisFile)
+		if err != nil {
+			return fmt.Errorf("failed to get absolute path for genesis: %w", err)
 		}
 
 		// Check if pharos.conf exists
@@ -47,9 +60,9 @@ var bootstrapCmd = &cobra.Command{
 		// pharos_cli genesis -g ./genesis.conf -c ./conf/pharos.conf
 		var cmdStr string
 		if hasEvmone {
-			cmdStr = fmt.Sprintf("cd ./bin && LD_PRELOAD=./libevmone.so ./pharos_cli genesis -g ../genesis.conf -c %s", bootstrapConfigPath)
+			cmdStr = fmt.Sprintf("cd ./bin && LD_PRELOAD=./libevmone.so ./pharos_cli genesis -g %s -c %s", absGenesisPath, absConfigPath)
 		} else {
-			cmdStr = fmt.Sprintf("cd ./bin && ./pharos_cli genesis -g ../genesis.conf -c %s", bootstrapConfigPath)
+			cmdStr = fmt.Sprintf("cd ./bin && ./pharos_cli genesis -g %s -c %s", absGenesisPath, absConfigPath)
 		}
 
 		fmt.Printf("Running: %s\n", cmdStr)
