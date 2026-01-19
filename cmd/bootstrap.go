@@ -20,7 +20,7 @@ var bootstrapCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Println("Starting bootstrap")
 
-		// Convert config path to absolute path
+		// Convert config path to absolute path (used as both config and storage)
 		absConfigPath, err := filepath.Abs(bootstrapConfigPath)
 		if err != nil {
 			return fmt.Errorf("failed to get absolute path for config: %w", err)
@@ -56,13 +56,23 @@ var bootstrapCmd = &cobra.Command{
 			hasEvmone = false
 		}
 
+		// Get password and set environment variable
+		password, err := GetPassword()
+		if err != nil {
+			fmt.Printf("Warning: %v\n", err)
+			fmt.Println("Bootstrapping without password. Set password with: ./ops set-password <password>")
+		} else {
+			fmt.Println("Using saved password")
+		}
+
 		// Run bootstrap genesis command
-		// pharos_cli genesis -g ./genesis.conf -c ./conf/pharos.conf
+		// pharos_cli genesis --storage <config_path> --genesis <genesis_path>
+		// Note: --storage uses the same pharos.conf file which contains storage configuration
 		var cmdStr string
 		if hasEvmone {
-			cmdStr = fmt.Sprintf("cd ./bin && LD_PRELOAD=./libevmone.so ./pharos_cli genesis -g %s -c %s", absGenesisPath, absConfigPath)
+			cmdStr = fmt.Sprintf("cd ./bin && LD_PRELOAD=./libevmone.so ./pharos_cli genesis --storage %s --genesis %s", absConfigPath, absGenesisPath)
 		} else {
-			cmdStr = fmt.Sprintf("cd ./bin && ./pharos_cli genesis -g %s -c %s", absGenesisPath, absConfigPath)
+			cmdStr = fmt.Sprintf("cd ./bin && ./pharos_cli genesis --storage %s --genesis %s", absConfigPath, absGenesisPath)
 		}
 
 		fmt.Printf("Running: %s\n", cmdStr)
@@ -70,6 +80,14 @@ var bootstrapCmd = &cobra.Command{
 		execCmd := exec.Command("bash", "-c", cmdStr)
 		execCmd.Stdout = os.Stdout
 		execCmd.Stderr = os.Stderr
+
+		// Set password environment variables if available
+		if password != "" {
+			execCmd.Env = append(os.Environ(),
+				fmt.Sprintf("CONSENSUS_KEY_PWD=%s", password),
+				fmt.Sprintf("PORTAL_SSL_PWD=%s", password),
+			)
+		}
 
 		if err := execCmd.Run(); err != nil {
 			return fmt.Errorf("bootstrap failed: %w", err)
@@ -83,5 +101,5 @@ var bootstrapCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(bootstrapCmd)
 
-	bootstrapCmd.Flags().StringVar(&bootstrapConfigPath, "config", "./conf/pharos.conf", "Path to pharos.conf file")
+	bootstrapCmd.Flags().StringVar(&bootstrapConfigPath, "config", "./conf/pharos.conf", "Path to pharos.conf file (also used as storage config)")
 }
