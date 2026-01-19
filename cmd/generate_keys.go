@@ -22,18 +22,33 @@ var generateKeysCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Printf("Generating keys to: %s\n", generateKeysOutputDir)
 
+		// Get password from saved password or flag
+		var passwd string
+		if generateKeysPasswd != "" {
+			// Use password from flag
+			passwd = generateKeysPasswd
+		} else {
+			// Try to get saved password
+			savedPasswd, err := GetPassword()
+			if err != nil {
+				return fmt.Errorf("password not found. Please run: ./ops set-password <password> or use --key-passwd flag")
+			}
+			passwd = savedPasswd
+			fmt.Println("Using saved password")
+		}
+
 		// Create output directory
 		if err := os.MkdirAll(generateKeysOutputDir, 0755); err != nil {
 			return fmt.Errorf("failed to create output directory: %w", err)
 		}
 
 		// Generate prime256v1 (ECDSA P-256) key
-		if err := generatePrime256v1Key(generateKeysOutputDir, generateKeysPasswd); err != nil {
+		if err := generatePrime256v1Key(generateKeysOutputDir, passwd); err != nil {
 			return fmt.Errorf("failed to generate prime256v1 key: %w", err)
 		}
 
 		// Generate BLS12381 key using external tool
-		if err := generateBLS12381Key(generateKeysOutputDir, generateKeysPasswd); err != nil {
+		if err := generateBLS12381Key(generateKeysOutputDir, passwd); err != nil {
 			fmt.Printf("Warning: Failed to generate bls12381 key: %v (this may require pharos_cli)\n", err)
 		}
 
@@ -151,6 +166,6 @@ func init() {
 
 	generateKeysCmd.Flags().StringVarP(&generateKeysOutputDir, "output-dir", "o", "./keys",
 		"Output directory for generated keys")
-	generateKeysCmd.Flags().StringVar(&generateKeysPasswd, "key-passwd", "123abc",
-		"Password for key encryption")
+	generateKeysCmd.Flags().StringVar(&generateKeysPasswd, "key-passwd", "",
+		"Password for key encryption (optional, uses saved password if not provided)")
 }
