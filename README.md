@@ -5,6 +5,7 @@ A simplified operations tool for Pharos blockchain deployment and management.
 ## Features
 
 - **Simplified Architecture**: No domain.json dependency, flat directory structure
+- **Password Management**: Secure password storage for key encryption
 - **Key Management**: Generate and manage cryptographic keys
 - **Node Operations**: Bootstrap, start, stop Pharos nodes
 - **Validator Management**: Register and exit validators
@@ -28,10 +29,19 @@ A simplified operations tool for Pharos blockchain deployment and management.
 │   ├── stabilizing.key
 │   └── stabilizing.pub
 ├── genesis.conf
-└── pharos-ops              # This binary
+├── .password               # Encrypted password file
+└── ops                     # This binary
 ```
 
 ## Installation
+
+### Download Pre-built Binary
+
+```bash
+# Download latest release
+wget https://github.com/PharosNetwork/ops/releases/latest/download/ops-linux-amd64 -O ops
+chmod +x ops
+```
 
 ### Build from Source
 
@@ -40,24 +50,31 @@ A simplified operations tool for Pharos blockchain deployment and management.
 git clone https://github.com/PharosNetwork/ops.git
 cd ops
 
-# Checkout the flat-structure-ops branch
-git checkout flat-structure-ops
-
 # Build
-GOOS=linux GOARCH=amd64 go build -o pharos-ops
+GOOS=linux GOARCH=amd64 go build -o ops
 
 # Copy to deployment directory
-cp pharos-ops /path/to/deployment/
+cp ops /path/to/deployment/
 ```
 
 ## Quick Start
 
-### 1. Generate Keys
+### 1. Set Password
+
+Set a password for key encryption:
+
+```bash
+./ops set-password YOUR_SECURE_PASSWORD
+```
+
+The password is stored in `./.password` file and used for key encryption/decryption.
+
+### 2. Generate Keys
 
 Generate cryptographic keys for your validator node:
 
 ```bash
-./pharos-ops generate-keys --output-dir ./keys
+./ops generate-keys
 ```
 
 This creates:
@@ -68,36 +85,13 @@ This creates:
 
 **Options:**
 - `--output-dir` - Output directory (default: `./keys`)
-- `--key-passwd` - Password for key encryption (default: `123abc`)
-
-### 2. Encode Keys to Configuration
-
-Encode keys and write them to `pharos.conf`:
-
-```bash
-# Encode domain key
-./pharos-ops encode-key-to-conf ./keys/domain.key \
-  --key-type domain \
-  --pharos-conf ./conf/pharos.conf
-
-# Encode stabilizing key
-./pharos-ops encode-key-to-conf ./keys/stabilizing.key \
-  --key-type stabilizing \
-  --pharos-conf ./conf/pharos.conf
-```
-
-Or just encode to base64 without writing to config:
-
-```bash
-./pharos-ops encode-key ./keys/domain.key
-```
 
 ### 3. Set Public IP
 
 Update the host IP in `pharos.conf`:
 
 ```bash
-./pharos-ops set-ip 47.84.7.245
+./ops set-ip 47.84.7.245
 ```
 
 This updates `aldaba.startup_config.init_config.host_ip` in `./conf/pharos.conf`.
@@ -107,7 +101,7 @@ This updates `aldaba.startup_config.init_config.host_ip` in `./conf/pharos.conf`
 Initialize the genesis state:
 
 ```bash
-./pharos-ops bootstrap
+./ops bootstrap --config ./pharos.conf
 ```
 
 This runs `pharos_cli genesis` to initialize the blockchain state.
@@ -117,7 +111,7 @@ This runs `pharos_cli genesis` to initialize the blockchain state.
 Start the Pharos node:
 
 ```bash
-./pharos-ops start
+./ops start --config ./pharos.conf
 ```
 
 This starts `pharos_light` in daemon mode.
@@ -128,10 +122,10 @@ Stop the running node:
 
 ```bash
 # Graceful stop
-./pharos-ops stop
+./ops stop
 
 # Force stop
-./pharos-ops stop --force
+./ops stop --force
 ```
 
 ## Validator Management
@@ -141,7 +135,7 @@ Stop the running node:
 Register your node as a validator on the network:
 
 ```bash
-./pharos-ops add-validator \
+./ops add-validator \
   --key YOUR_PRIVATE_KEY_HERE \
   --domain-label my-validator \
   --domain-endpoint tcp://47.84.7.245:19000 \
@@ -163,7 +157,7 @@ Register your node as a validator on the network:
 
 **Example:**
 ```bash
-./pharos-ops add-validator \
+./ops add-validator \
   --rpc-endpoint http://127.0.0.1:18100 \
   --key YOUR_PRIVATE_KEY_HERE \
   --domain-label golang-validator \
@@ -186,7 +180,7 @@ Validator register success
 Request to exit from the validator set:
 
 ```bash
-./pharos-ops exit-validator \
+./ops exit-validator \
   --key YOUR_PRIVATE_KEY_HERE
 ```
 
@@ -199,7 +193,7 @@ Request to exit from the validator set:
 
 **Example:**
 ```bash
-./pharos-ops exit-validator \
+./ops exit-validator \
   --rpc-endpoint http://127.0.0.1:18100 \
   --key YOUR_PRIVATE_KEY_HERE
 ```
@@ -219,25 +213,24 @@ Validator exit success
 ### New Node Deployment
 
 ```bash
-# 1. Generate keys
-./pharos-ops generate-keys
+# 1. Set password
+./ops set-password YOUR_SECURE_PASSWORD
 
-# 2. Encode keys to config
-./pharos-ops encode-key-to-conf ./keys/domain.key --key-type domain
-./pharos-ops encode-key-to-conf ./keys/stabilizing.key --key-type stabilizing
+# 2. Generate keys
+./ops generate-keys
 
 # 3. Set public IP
 PUBLIC_IP=$(curl -s ifconfig.me)
-./pharos-ops set-ip $PUBLIC_IP
+./ops set-ip $PUBLIC_IP
 
 # 4. Bootstrap
-./pharos-ops bootstrap
+./ops bootstrap --config ./pharos.conf
 
 # 5. Start node
-./pharos-ops start
+./ops start --config ./pharos.conf
 
 # 6. Register as validator (optional)
-./pharos-ops add-validator \
+./ops add-validator \
   --rpc-endpoint http://127.0.0.1:18100 \
   --key YOUR_PRIVATE_KEY_HERE \
   --domain-label my-validator \
@@ -247,21 +240,26 @@ PUBLIC_IP=$(curl -s ifconfig.me)
 
 ## Command Reference
 
+### Password Management
+
+| Command | Description |
+|---------|-------------|
+| `set-password <password>` | Set password for key encryption |
+| `get-password` | Display saved password |
+
 ### Key Management
 
 | Command | Description |
 |---------|-------------|
 | `generate-keys` | Generate domain and stabilizing keys |
-| `encode-key <key_path>` | Encode key to base64 |
-| `encode-key-to-conf <key_path>` | Encode key and write to pharos.conf |
 
 ### Node Operations
 
 | Command | Description |
 |---------|-------------|
 | `set-ip <ip_address>` | Set public IP in pharos.conf |
-| `bootstrap` | Initialize genesis state |
-| `start` | Start pharos_light service |
+| `bootstrap --config <path>` | Initialize genesis state |
+| `start --config <path>` | Start pharos_light service |
 | `stop` | Stop pharos_light service |
 
 ### Validator Operations
@@ -380,13 +378,13 @@ If validator registration fails:
 
 ```bash
 # Build for Linux
-GOOS=linux GOARCH=amd64 go build -o pharos-ops
+GOOS=linux GOARCH=amd64 go build -o ops
 
 # Build for macOS
-GOOS=darwin GOARCH=amd64 go build -o pharos-ops
+GOOS=darwin GOARCH=amd64 go build -o ops
 
 # Build for current platform
-go build -o pharos-ops
+go build -o ops
 ```
 
 ### Testing
@@ -396,7 +394,7 @@ go build -o pharos-ops
 go test ./...
 
 # Test specific command
-./pharos-ops generate-keys --output-dir ./test-keys
+./ops generate-keys --output-dir ./test-keys
 ```
 
 ## License
