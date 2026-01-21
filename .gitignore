@@ -26,4 +26,4 @@ go.work
 Thumbs.db
 
 # Logs
-*.log
+*.logops-linux-amd64
