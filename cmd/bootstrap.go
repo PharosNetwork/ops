@@ -66,13 +66,12 @@ var bootstrapCmd = &cobra.Command{
 		}
 
 		// Run bootstrap genesis command
-		// pharos_cli genesis --storage <config_path> --genesis <genesis_path>
-		// Note: --storage uses the same pharos.conf file which contains storage configuration
+		// pharos_cli genesis -c <config_path> -g <genesis_path>
 		var cmdStr string
 		if hasEvmone {
-			cmdStr = fmt.Sprintf("cd ./bin && LD_PRELOAD=./libevmone.so ./pharos_cli genesis --storage %s --genesis %s", absConfigPath, absGenesisPath)
+			cmdStr = fmt.Sprintf("cd ./bin && LD_PRELOAD=./libevmone.so ./pharos_cli genesis -c %s -g %s", absConfigPath, absGenesisPath)
 		} else {
-			cmdStr = fmt.Sprintf("cd ./bin && ./pharos_cli genesis --storage %s --genesis %s", absConfigPath, absGenesisPath)
+			cmdStr = fmt.Sprintf("cd ./bin && ./pharos_cli genesis -c %s -g %s", absConfigPath, absGenesisPath)
 		}
 
 		fmt.Printf("Running: %s\n", cmdStr)
@@ -101,5 +100,5 @@ var bootstrapCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(bootstrapCmd)
 
-	bootstrapCmd.Flags().StringVar(&bootstrapConfigPath, "config", "./conf/pharos.conf", "Path to pharos.conf file (also used as storage config)")
+	bootstrapCmd.Flags().StringVar(&bootstrapConfigPath, "config", "./conf/pharos.conf", "Path to pharos.conf file")
 }

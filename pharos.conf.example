@@ -1,0 +1,69 @@
+{
+  "aldaba": {
+    "secret_config": {
+      "domain_key_path": "./keys/domain.key",
+      "stabilizing_key_path": "./keys/stabilizing.key"
+    },
+    "startup_config": {
+      "init_config": {
+        "chain_id": "aldaba-ng",
+        "data_path": "../data",
+        "domain_id": "domain0",
+        "service_name": "light",
+        "host_ip": "47.84.7.245",
+        "http_port": "18100",
+        "ws_port": "18200",
+        "tcp_port": "19000",
+        "rpc_port": "20000",
+        "mygrid_client_deploy_mode": "light",
+        "mygrid_client_id": "light",
+        "etcd": {
+          "enable": 0,
+          "endpoints": [],
+          "retry_sleep_time": 1,
+          "timeout": 5000
+        }
+      }
+    }
+  },
+  "storage": {
+    "mygrid_conf": {
+      "log": {
+        "pamir": {
+          "filename": "../log/pamir.log",
+          "level": "info",
+          "max_file_size": 104857600,
+          "max_files": 100
+        }
+      },
+      "config": {
+        "mygrid": {
+          "user_flags": {
+            "letus_merkle_enable_memory_page_lru_cache": true,
+            "letus_merkle_index_memory_page_lru_cache_max_size_each_db": 167772160,
+            "letus_merkle_state_tree_write_cache": false,
+            "letus_merkle_state_tree_read_cache": false,
+            "letus_data_dredger_scheduler_stop": false,
+            "letus_enable_merge_delta": true
+          },
+          "expert_flags": {
+            "letus_active_mem_index_table_max_memory_size": 33554432,
+            "letus_persist_index_block_lru_cache_max_size": 8388608,
+            "pamir_enable_rocksdb_metrics": true,
+            "mygrid_client_enable_callback_thread_pool": true,
+            "mygrid_client_network_thread_num": 16,
+            "letus_l0_index_files_size_threshold": 33554432,
+            "storage_kernel_rocks_write_buffer_size": 33554432,
+            "storage_kernel_rocks_max_write_buffer_number": 2,
+            "page_release_batch_size_when_destruct_merke_mem_index": 100
+          }
+        }
+      }
+    },
+    "mygrid_env": {
+      "mygrid_env": {
+        "project_data_path": "../data"
+      }
+    }
+  }
+}
