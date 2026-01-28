@@ -23,9 +23,13 @@ const (
 	stakingABI     = `[{"inputs":[],"stateMutability":"nonpayable","type":"constructor"},{"anonymous":false,"inputs":[{"indexed":true,"internalType":"bytes32","name":"poolId","type":"bytes32"},{"indexed":false,"internalType":"string","name":"description","type":"string"},{"indexed":false,"internalType":"string","name":"publicKey","type":"string"},{"indexed":false,"internalType":"string","name":"blsPublicKey","type":"string"},{"indexed":false,"internalType":"string","name":"endpoint","type":"string"},{"indexed":false,"internalType":"uint64","name":"effectiveBlockNum","type":"uint64"},{"indexed":false,"internalType":"uint8","name":"status","type":"uint8"}],"name":"DomainUpdate","type":"event"},{"anonymous":false,"inputs":[{"indexed":true,"internalType":"uint256","name":"epochNumber","type":"uint256"},{"indexed":true,"internalType":"uint256","name":"blockNumber","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"timestamp","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"totalStake","type":"uint256"},{"indexed":false,"internalType":"bytes32[]","name":"activeValidators","type":"bytes32[]"}],"name":"EpochChange","type":"event"},{"anonymous":false,"inputs":[{"indexed":true,"internalType":"address","name":"delegator","type":"address"},{"indexed":true,"internalType":"bytes32","name":"poolId","type":"bytes32"},{"indexed":false,"internalType":"uint256","name":"amount","type":"uint256"}],"name":"StakeAdded","type":"event"},{"anonymous":false,"inputs":[{"indexed":true,"internalType":"bytes32","name":"poolId","type":"bytes32"}],"name":"ValidatorExitRequested","type":"event"},{"inputs":[{"internalType":"bytes32","name":"poolId","type":"bytes32"}],"name":"exitValidator","outputs":[],"stateMutability":"nonpayable","type":"function"},{"inputs":[{"internalType":"string","name":"description","type":"string"},{"internalType":"string","name":"publicKey","type":"string"},{"internalType":"string","name":"proofOfPossession","type":"string"},{"internalType":"string","name":"blsPublicKey","type":"string"},{"internalType":"string","name":"blsProofOfPossession","type":"string"},{"internalType":"string","name":"endpoint","type":"string"}],"name":"registerValidator","outputs":[],"stateMutability":"payable","type":"function"}]`
 )
 
+const (
+	// Environment variable name for private key
+	ValidatorPrivateKeyEnv = "VALIDATOR_PRIVATE_KEY"
+)
+
 var (
 	validatorRPCEndpoint  string
-	validatorKey          string
 	validatorStake        string
 	domainLabel           string
 	domainEndpoint        string
@@ -35,7 +39,6 @@ var (
 
 var (
 	exitValidatorRPCEndpoint string
-	exitValidatorKey         string
 	exitDomainPubKeyPath     string
 )
 
@@ -46,13 +49,21 @@ var addValidatorCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Println("Adding validator...")
 
-		// Read domain public key
+		// Get private key from environment variable
+		privateKeyHex := os.Getenv(ValidatorPrivateKeyEnv)
+		if privateKeyHex == "" {
+			return fmt.Errorf("private key not set. Please set environment variable %s", ValidatorPrivateKeyEnv)
+		}
+		// Remove 0x prefix if present
+		privateKeyHex = strings.TrimPrefix(privateKeyHex, "0x")
+
+		// Read domain public key (with prefix stripping)
 		domainPubKey, err := readPublicKey(domainPubKeyPath)
 		if err != nil {
 			return fmt.Errorf("failed to read domain public key: %w", err)
 		}
 
-		// Read stabilizing public key
+		// Read stabilizing public key (with prefix stripping)
 		stabilizingPubKey, err := readPublicKey(stabilizingPubKeyPath)
 		if err != nil {
 			return fmt.Errorf("failed to read stabilizing public key: %w", err)
@@ -61,6 +72,9 @@ var addValidatorCmd = &cobra.Command{
 		// Add 0x prefix if not present
 		if len(domainPubKey) > 0 && !strings.HasPrefix(domainPubKey, "0x") {
 			domainPubKey = "0x" + domainPubKey
+		}
+		if len(stabilizingPubKey) > 0 && !strings.HasPrefix(stabilizingPubKey, "0x") {
+			stabilizingPubKey = "0x" + stabilizingPubKey
 		}
 
 		// Connect to Ethereum client
@@ -73,7 +87,7 @@ var addValidatorCmd = &cobra.Command{
 		fmt.Println("Connected to endpoint")
 
 		// Load private key
-		privateKey, err := crypto.HexToECDSA(validatorKey)
+		privateKey, err := crypto.HexToECDSA(privateKeyHex)
 		if err != nil {
 			return fmt.Errorf("failed to load private key: %w", err)
 		}
@@ -194,8 +208,16 @@ var exitValidatorCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Println("Exiting validator...")
 
+		// Get private key from environment variable
+		privateKeyHex := os.Getenv(ValidatorPrivateKeyEnv)
+		if privateKeyHex == "" {
+			return fmt.Errorf("private key not set. Please set environment variable %s", ValidatorPrivateKeyEnv)
+		}
+		// Remove 0x prefix if present
+		privateKeyHex = strings.TrimPrefix(privateKeyHex, "0x")
+
 		// Load private key first to get account address
-		privateKey, err := crypto.HexToECDSA(exitValidatorKey)
+		privateKey, err := crypto.HexToECDSA(privateKeyHex)
 		if err != nil {
 			return fmt.Errorf("failed to load private key: %w", err)
 		}
@@ -324,6 +346,21 @@ func readPublicKey(path string) (string, error) {
 	}
 	// Trim whitespace and newlines
 	key := strings.TrimSpace(string(data))
+
+	// Strip prefixes from public key
+	// Possible prefixes: "0x1003", "1003", "0x4003", "0x4002", "0x"
+	if strings.HasPrefix(key, "0x1003") {
+		key = key[6:] // Remove "0x1003"
+	} else if strings.HasPrefix(key, "0x4003") {
+		key = key[6:] // Remove "0x4003"
+	} else if strings.HasPrefix(key, "0x4002") {
+		key = key[6:] // Remove "0x4002"
+	} else if strings.HasPrefix(key, "1003") {
+		key = key[4:] // Remove "1003"
+	} else if strings.HasPrefix(key, "0x") {
+		key = key[2:] // Remove "0x"
+	}
+
 	return key, nil
 }
 
@@ -333,21 +370,16 @@ func init() {
 
 	// add-validator flags
 	addValidatorCmd.Flags().StringVar(&validatorRPCEndpoint, "rpc-endpoint", "http://127.0.0.1:18100", "RPC endpoint URL")
-	addValidatorCmd.Flags().StringVar(&validatorKey, "key", "", "Private key for transaction signing (required)")
 	addValidatorCmd.Flags().StringVar(&validatorStake, "stake", "", "Stake amount in tokens (default: 1000000 tokens)")
 	addValidatorCmd.Flags().StringVar(&domainLabel, "domain-label", "", "Domain label/description")
 	addValidatorCmd.Flags().StringVar(&domainEndpoint, "domain-endpoint", "", "Domain endpoint URL")
 	addValidatorCmd.Flags().StringVar(&domainPubKeyPath, "domain-pubkey", "./keys/domain.pub", "Path to domain public key file")
 	addValidatorCmd.Flags().StringVar(&stabilizingPubKeyPath, "stabilizing-pubkey", "./keys/stabilizing.pub", "Path to stabilizing public key file")
 
-	addValidatorCmd.MarkFlagRequired("key")
 	addValidatorCmd.MarkFlagRequired("domain-label")
 	addValidatorCmd.MarkFlagRequired("domain-endpoint")
 
 	// exit-validator flags
 	exitValidatorCmd.Flags().StringVar(&exitValidatorRPCEndpoint, "rpc-endpoint", "http://127.0.0.1:18100", "RPC endpoint URL")
-	exitValidatorCmd.Flags().StringVar(&exitValidatorKey, "key", "", "Private key for transaction signing (required)")
 	exitValidatorCmd.Flags().StringVar(&exitDomainPubKeyPath, "domain-pubkey", "./keys/domain.pub", "Path to domain public key file")
-
-	exitValidatorCmd.MarkFlagRequired("key")
 }

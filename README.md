@@ -86,7 +86,25 @@ This creates:
 **Options:**
 - `--output-dir` - Output directory (default: `./keys`)
 
-### 3. Set Public IP
+### 3. Get Node ID
+
+Get the Node ID from your domain public key:
+
+```bash
+./ops get-nodeid
+```
+
+This calculates the SHA256 hash of the domain public key (with prefix stripped) and displays the Node ID.
+
+**Options:**
+- `--keys-dir` - Directory containing domain.pub (default: `./keys`)
+
+**Output:**
+```
+Node ID: abc123def456789...
+```
+
+### 4. Set Public IP
 
 Update the host IP in `pharos.conf`:
 
@@ -96,7 +114,7 @@ Update the host IP in `pharos.conf`:
 
 This updates `aldaba.startup_config.init_config.host_ip` in `./conf/pharos.conf`.
 
-### 4. Bootstrap Node
+### 5. Bootstrap Node
 
 Initialize the genesis state:
 
@@ -106,7 +124,7 @@ Initialize the genesis state:
 
 This runs `pharos_cli genesis` to initialize the blockchain state.
 
-### 5. Start Node
+### 6. Start Node
 
 Start the Pharos node:
 
@@ -116,7 +134,7 @@ Start the Pharos node:
 
 This starts `pharos_light` in daemon mode.
 
-### 6. Stop Node
+### 7. Stop Node
 
 Stop the running node:
 
@@ -135,15 +153,19 @@ Stop the running node:
 Register your node as a validator on the network:
 
 ```bash
+# Set private key via environment variable (required)
+export VALIDATOR_PRIVATE_KEY=YOUR_PRIVATE_KEY_HERE
+
 ./ops add-validator \
-  --key YOUR_PRIVATE_KEY_HERE \
   --domain-label my-validator \
   --domain-endpoint tcp://47.84.7.245:19000 \
   --stake 1000000
 ```
 
+**Environment Variable (Required):**
+- `VALIDATOR_PRIVATE_KEY` - Private key for transaction signing (hex format, with or without 0x prefix)
+
 **Required Parameters:**
-- `--key` - Private key for transaction signing (hex format, no 0x prefix)
 - `--domain-label` - Validator name/description
 - `--domain-endpoint` - Your validator's public endpoint URL
   - For IP:PORT format: must use `tcp://` prefix (e.g., `tcp://127.0.0.1:19000`)
@@ -157,9 +179,10 @@ Register your node as a validator on the network:
 
 **Example:**
 ```bash
+export VALIDATOR_PRIVATE_KEY=abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890
+
 ./ops add-validator \
   --rpc-endpoint http://127.0.0.1:18100 \
-  --key YOUR_PRIVATE_KEY_HERE \
   --domain-label golang-validator \
   --domain-endpoint tcp://127.0.0.1:19000 \
   --stake 10000000
@@ -180,12 +203,14 @@ Validator register success
 Request to exit from the validator set:
 
 ```bash
-./ops exit-validator \
-  --key YOUR_PRIVATE_KEY_HERE
+# Set private key via environment variable (required)
+export VALIDATOR_PRIVATE_KEY=YOUR_PRIVATE_KEY_HERE
+
+./ops exit-validator
 ```
 
-**Required Parameters:**
-- `--key` - Private key for transaction signing
+**Environment Variable (Required):**
+- `VALIDATOR_PRIVATE_KEY` - Private key for transaction signing (hex format, with or without 0x prefix)
 
 **Optional Parameters:**
 - `--rpc-endpoint` - RPC endpoint to send transaction (default: `http://127.0.0.1:18100`)
@@ -193,9 +218,10 @@ Request to exit from the validator set:
 
 **Example:**
 ```bash
+export VALIDATOR_PRIVATE_KEY=abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890
+
 ./ops exit-validator \
-  --rpc-endpoint http://127.0.0.1:18100 \
-  --key YOUR_PRIVATE_KEY_HERE
+  --rpc-endpoint http://127.0.0.1:18100
 ```
 
 **Output:**
@@ -230,9 +256,9 @@ PUBLIC_IP=$(curl -s ifconfig.me)
 ./ops start --config ./pharos.conf
 
 # 6. Register as validator (optional)
+export VALIDATOR_PRIVATE_KEY=YOUR_PRIVATE_KEY_HERE
 ./ops add-validator \
   --rpc-endpoint http://127.0.0.1:18100 \
-  --key YOUR_PRIVATE_KEY_HERE \
   --domain-label my-validator \
   --domain-endpoint tcp://$PUBLIC_IP:19000 \
   --stake 1000000
@@ -252,6 +278,7 @@ PUBLIC_IP=$(curl -s ifconfig.me)
 | Command | Description |
 |---------|-------------|
 | `generate-keys` | Generate domain and stabilizing keys |
+| `get-nodeid` | Get Node ID from domain public key |
 
 ### Node Operations
 
@@ -369,7 +396,8 @@ If validator commands fail with connection errors:
 
 If validator registration fails:
 - Ensure the account has sufficient balance for gas fees
-- Check that the private key is correct (64 hex characters, no 0x prefix)
+- Check that the private key is correct (64 hex characters, with or without 0x prefix)
+- Verify the `VALIDATOR_PRIVATE_KEY` environment variable is set
 - Verify the network is accepting new validators
 
 ## Development
