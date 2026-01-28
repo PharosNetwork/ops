@@ -85,8 +85,8 @@ func generatePrime256v1Key(outputDir string, passwd string) error {
 		return fmt.Errorf("failed to extract public key: %w", err)
 	}
 
-	// Write public key without prefix
-	pubKeyHex := string(pubOutput)
+	// Add prefix "1003" to public key
+	pubKeyHex := "1003" + string(pubOutput)
 
 	if err := os.WriteFile(pubPath, []byte(pubKeyHex), 0644); err != nil {
 		return fmt.Errorf("failed to write public key: %w", err)
@@ -138,12 +138,8 @@ func generateBLS12381Key(outputDir string, passwd string) error {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "PRIVKEY:") {
 			prikey = strings.TrimSpace(strings.TrimPrefix(line, "PRIVKEY:"))
-			// Remove 0x4002 prefix if present
-			prikey = strings.TrimPrefix(prikey, "0x4002")
 		} else if strings.HasPrefix(line, "PUBKEY:") {
 			pubkey = strings.TrimSpace(strings.TrimPrefix(line, "PUBKEY:"))
-			// Remove 0x4003 prefix if present
-			pubkey = strings.TrimPrefix(pubkey, "0x4003")
 		}
 	}
 
