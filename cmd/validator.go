@@ -192,6 +192,12 @@ var addValidatorCmd = &cobra.Command{
 		}
 
 		if receipt.Status == 1 {
+			// Calculate and display Node ID
+			pubKeyBytes, err := hex.DecodeString(domainPubKey[2:]) // Remove 0x prefix
+			if err == nil {
+				nodeID := sha256.Sum256(pubKeyBytes)
+				fmt.Printf("Node ID: %s\n", hex.EncodeToString(nodeID[:]))
+			}
 			fmt.Println("Validator register success")
 		} else {
 			fmt.Println("Validator register failed")
