@@ -9,7 +9,6 @@ A simplified operations tool for Pharos blockchain deployment and management.
 - **Key Management**: Generate and manage cryptographic keys
 - **Node Operations**: Bootstrap, start, stop Pharos nodes
 - **Validator Management**: Register and exit validators
-- **Configuration**: Easy IP and configuration management
 
 ## Directory Structure
 
@@ -104,17 +103,7 @@ This calculates the SHA256 hash of the domain public key (with prefix stripped) 
 Node ID: abc123def456789...
 ```
 
-### 4. Set Public IP
-
-Update the host IP in `pharos.conf`:
-
-```bash
-./ops set-ip 47.84.7.245
-```
-
-This updates `aldaba.startup_config.init_config.host_ip` in `./conf/pharos.conf`.
-
-### 5. Bootstrap Node
+### 4. Bootstrap Node
 
 Initialize the genesis state:
 
@@ -124,7 +113,7 @@ Initialize the genesis state:
 
 This runs `pharos_cli genesis` to initialize the blockchain state.
 
-### 6. Start Node
+### 5. Start Node
 
 Start the Pharos node:
 
@@ -134,7 +123,7 @@ Start the Pharos node:
 
 This starts `pharos_light` in daemon mode.
 
-### 7. Stop Node
+### 6. Stop Node
 
 Stop the running node:
 
@@ -167,9 +156,10 @@ export VALIDATOR_PRIVATE_KEY=YOUR_PRIVATE_KEY_HERE
 
 **Required Parameters:**
 - `--domain-label` - Validator name/description
-- `--domain-endpoint` - Your validator's public endpoint URL
-  - For IP:PORT format: must use `tcp://` prefix (e.g., `tcp://127.0.0.1:19000`)
+- `--domain-endpoint` - Your validator's **public** endpoint URL (must be accessible from other nodes)
+  - For IP:PORT format: must use `tcp://` prefix with your **public IP** (e.g., `tcp://47.84.7.245:19000`)
   - For domain names: can use any protocol (e.g., `https://pharos.validator.com`)
+  - ⚠️ **Do NOT use `127.0.0.1` or `localhost`** - other nodes cannot connect to your validator
 
 **Optional Parameters:**
 - `--rpc-endpoint` - RPC endpoint to send transaction (default: `http://127.0.0.1:18100`)
@@ -181,10 +171,13 @@ export VALIDATOR_PRIVATE_KEY=YOUR_PRIVATE_KEY_HERE
 ```bash
 export VALIDATOR_PRIVATE_KEY=abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890
 
+# Get your public IP
+PUBLIC_IP=$(curl -s ifconfig.me)
+
 ./ops add-validator \
   --rpc-endpoint http://127.0.0.1:18100 \
   --domain-label golang-validator \
-  --domain-endpoint tcp://127.0.0.1:19000 \
+  --domain-endpoint tcp://$PUBLIC_IP:19000 \
   --stake 10000000
 ```
 
@@ -245,18 +238,15 @@ Validator exit success
 # 2. Generate keys
 ./ops generate-keys
 
-# 3. Set public IP
-PUBLIC_IP=$(curl -s ifconfig.me)
-./ops set-ip $PUBLIC_IP
-
-# 4. Bootstrap
+# 3. Bootstrap
 ./ops bootstrap --config ./pharos.conf
 
-# 5. Start node
+# 4. Start node
 ./ops start --config ./pharos.conf
 
-# 6. Register as validator (optional)
+# 5. Register as validator (optional)
 export VALIDATOR_PRIVATE_KEY=YOUR_PRIVATE_KEY_HERE
+PUBLIC_IP=$(curl -s ifconfig.me)
 ./ops add-validator \
   --rpc-endpoint http://127.0.0.1:18100 \
   --domain-label my-validator \
@@ -284,7 +274,6 @@ export VALIDATOR_PRIVATE_KEY=YOUR_PRIVATE_KEY_HERE
 
 | Command | Description |
 |---------|-------------|
-| `set-ip <ip_address>` | Set public IP in pharos.conf |
 | `bootstrap --config <path>` | Initialize genesis state |
 | `start --config <path>` | Start pharos_light service |
 | `stop` | Stop pharos_light service |
@@ -357,20 +346,24 @@ export VALIDATOR_PRIVATE_KEY=YOUR_PRIVATE_KEY_HERE
 
 **Problem:** Validator registration fails or other nodes cannot connect to your validator.
 
-**Solution:** Ensure `--domain-endpoint` uses the correct format:
+**Solution:** Ensure `--domain-endpoint` uses your **public IP address**, not `127.0.0.1` or `localhost`:
 
-**For IP address + port:**
-- ✅ Correct: `tcp://127.0.0.1:19000`
-- ✅ Correct: `tcp://47.84.7.245:19000`
-- ❌ Wrong: `http://127.0.0.1:19000`
-- ❌ Wrong: `127.0.0.1:19000`
+**Correct examples (using public IP):**
+- ✅ `tcp://47.84.7.245:19000`
+- ✅ `tcp://203.0.113.50:19000`
+- ✅ `https://pharos.validator.com`
 
-**For domain names:**
-- ✅ Correct: `https://pharos.validator.com`
-- ✅ Correct: `http://pharos.validator.com`
-- ✅ Correct: `tcp://pharos.validator.com:19000`
+**Wrong examples (using localhost):**
+- ❌ `tcp://127.0.0.1:19000` - Other nodes cannot connect!
+- ❌ `tcp://localhost:19000` - Other nodes cannot connect!
+- ❌ `http://127.0.0.1:19000` - Wrong protocol and localhost
 
-**Rule:** When using IP:PORT format, you must use `tcp://` prefix. Domain names can use any protocol.
+**Get your public IP:**
+```bash
+curl -s ifconfig.me
+```
+
+**Rule:** When using IP:PORT format, you must use `tcp://` prefix with your **public IP**.
 
 ### pharos_cli not found
 
