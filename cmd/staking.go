@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"reflect"
 	"strings"
 
 	"github.com/ethereum/go-ethereum"
@@ -262,23 +263,20 @@ var getValidatorInfoCmd = &cobra.Command{
 			return fmt.Errorf("no results returned from getValidator")
 		}
 
-		// Extract the tuple fields manually
-		validatorTuple := results[0].(struct {
-			Description           string
-			PublicKey             string
-			PublicKeyPop          string
-			BlsPublicKey          string
-			BlsPublicKeyPop       string
-			Endpoint              string
-			Status                uint8
-			PoolId                [32]byte
-			TotalStake            *big.Int
-			Owner                 common.Address
-			StakeSnapshot         *big.Int
-			PendingWithdrawStake  *big.Int
-			PendingWithdrawWindow uint8
-			PendingOwner          common.Address
-		})
+		// Use reflection to extract fields from the returned struct
+		validatorValue := reflect.ValueOf(results[0])
+
+		description := validatorValue.FieldByName("Description").String()
+		publicKey := validatorValue.FieldByName("PublicKey").String()
+		blsPublicKey := validatorValue.FieldByName("BlsPublicKey").String()
+		endpoint := validatorValue.FieldByName("Endpoint").String()
+		status := uint8(validatorValue.FieldByName("Status").Uint())
+		poolId := validatorValue.FieldByName("PoolId").Interface().([32]byte)
+		totalStake := validatorValue.FieldByName("TotalStake").Interface().(*big.Int)
+		owner := validatorValue.FieldByName("Owner").Interface().(common.Address)
+		stakeSnapshot := validatorValue.FieldByName("StakeSnapshot").Interface().(*big.Int)
+		pendingWithdrawStake := validatorValue.FieldByName("PendingWithdrawStake").Interface().(*big.Int)
+		pendingWithdrawWindow := uint8(validatorValue.FieldByName("PendingWithdrawWindow").Uint())
 
 		// Call getCommissionRate
 		commissionData, err := parsedABI.Pack("getCommissionRate", poolIDBytes32)
@@ -322,19 +320,19 @@ var getValidatorInfoCmd = &cobra.Command{
 
 		// Format and print results
 		fmt.Println("=== Validator Information ===")
-		fmt.Printf("Pool ID:              %s\n", hex.EncodeToString(validatorTuple.PoolId[:]))
-		fmt.Printf("Description:          %s\n", validatorTuple.Description)
-		fmt.Printf("Owner:                %s\n", validatorTuple.Owner.Hex())
-		fmt.Printf("Endpoint:             %s\n", validatorTuple.Endpoint)
-		fmt.Printf("Status:               %d\n", validatorTuple.Status)
-		fmt.Printf("Public Key:           %s\n", validatorTuple.PublicKey)
-		fmt.Printf("BLS Public Key:       %s\n", validatorTuple.BlsPublicKey)
+		fmt.Printf("Pool ID:              %s\n", hex.EncodeToString(poolId[:]))
+		fmt.Printf("Description:          %s\n", description)
+		fmt.Printf("Owner:                %s\n", owner.Hex())
+		fmt.Printf("Endpoint:             %s\n", endpoint)
+		fmt.Printf("Status:               %d\n", status)
+		fmt.Printf("Public Key:           %s\n", publicKey)
+		fmt.Printf("BLS Public Key:       %s\n", blsPublicKey)
 		fmt.Println()
 		fmt.Println("=== Staking Information ===")
-		fmt.Printf("Total Stake:          %s wei\n", validatorTuple.TotalStake.String())
-		fmt.Printf("Stake Snapshot:       %s wei\n", validatorTuple.StakeSnapshot.String())
-		fmt.Printf("Pending Withdraw:     %s wei\n", validatorTuple.PendingWithdrawStake.String())
-		fmt.Printf("Withdraw Window:      %d epochs\n", validatorTuple.PendingWithdrawWindow)
+		fmt.Printf("Total Stake:          %s wei\n", totalStake.String())
+		fmt.Printf("Stake Snapshot:       %s wei\n", stakeSnapshot.String())
+		fmt.Printf("Pending Withdraw:     %s wei\n", pendingWithdrawStake.String())
+		fmt.Printf("Withdraw Window:      %d epochs\n", pendingWithdrawWindow)
 		fmt.Println()
 		fmt.Println("=== Commission & Delegation ===")
 		commissionRateValue := commissionRateBig.Uint64()
