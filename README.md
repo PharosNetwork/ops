@@ -137,6 +137,29 @@ Stop the running node:
 
 ## Validator Management
 
+### Get Node ID / Pool ID
+
+Calculate the Node ID (also known as Pool ID) from your domain public key:
+
+```bash
+# Get Node ID without prefix (default)
+./ops get-nodeid
+
+# Get Node ID with 0x prefix (for contract calls)
+./ops get-nodeid --format 0x
+```
+
+**Options:**
+- `--keys-dir` - Directory containing domain.pub (default: `./keys`)
+- `--format` - Output format: `hex` (no prefix, default) or `0x` (with 0x prefix)
+
+**Output:**
+```
+Node ID: abc123def456789...
+```
+
+**Note:** Pool ID is the same as Node ID but with `0x` prefix for smart contract interactions.
+
 ### Register as Validator
 
 Register your node as a validator on the network:
@@ -227,6 +250,130 @@ Validator exit tx: 0xfedcba0987654321...
 Validator exit success
 ```
 
+## Staking Management
+
+After registering as a validator, you can manage staking settings including delegation and commission rates.
+
+### Enable/Disable Delegation
+
+Allow or disallow delegators to stake to your validator pool:
+
+```bash
+# Set private key via environment variable (required)
+export VALIDATOR_PRIVATE_KEY=YOUR_PRIVATE_KEY_HERE
+
+# Enable delegation
+./ops set-delegation --enabled=true
+
+# Disable delegation
+./ops set-delegation --enabled=false
+```
+
+**Environment Variable (Required):**
+- `VALIDATOR_PRIVATE_KEY` - Private key for transaction signing (hex format, with or without 0x prefix)
+
+**Optional Parameters:**
+- `--rpc-endpoint` - RPC endpoint to send transaction (default: `http://127.0.0.1:18100`)
+- `--pool-id` - Pool ID (hex, 64 characters). If empty, computed from `--domain-pubkey`
+- `--domain-pubkey` - Path to domain public key (default: `./keys/domain.pub`)
+- `--enabled` - Enable (true) or disable (false) delegation (default: `true`)
+
+**Example:**
+```bash
+export VALIDATOR_PRIVATE_KEY=abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890
+
+./ops set-delegation \
+  --rpc-endpoint http://127.0.0.1:18100 \
+  --enabled=true
+```
+
+### Set Commission Rate
+
+Set the commission rate for your validator (percentage of rewards taken from delegators):
+
+```bash
+# Set private key via environment variable (required)
+export VALIDATOR_PRIVATE_KEY=YOUR_PRIVATE_KEY_HERE
+
+# Set commission rate to 10% (1000 basis points)
+./ops set-commission-rate --rate 1000
+```
+
+**Environment Variable (Required):**
+- `VALIDATOR_PRIVATE_KEY` - Private key for transaction signing (hex format, with or without 0x prefix)
+
+**Required Parameters:**
+- `--rate` - Commission rate in basis points (0-10000, where 10000 = 100%)
+
+**Optional Parameters:**
+- `--rpc-endpoint` - RPC endpoint to send transaction (default: `http://127.0.0.1:18100`)
+- `--pool-id` - Pool ID (hex, 64 characters). If empty, computed from `--domain-pubkey`
+- `--domain-pubkey` - Path to domain public key (default: `./keys/domain.pub`)
+
+**Rate Examples:**
+- `100` = 1%
+- `500` = 5%
+- `1000` = 10%
+- `2500` = 25%
+- `10000` = 100%
+
+**Example:**
+```bash
+export VALIDATOR_PRIVATE_KEY=abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890
+
+# Set 5% commission rate
+./ops set-commission-rate \
+  --rpc-endpoint http://127.0.0.1:18100 \
+  --rate 500
+```
+
+### Get Validator Information
+
+Query comprehensive validator information including staking details, commission rate, and delegation status:
+
+```bash
+./ops get-validator-info
+```
+
+**Optional Parameters:**
+- `--rpc-endpoint` - RPC endpoint to query (default: `http://127.0.0.1:18100`)
+- `--pool-id` - Pool ID (hex, 64 characters). If empty, computed from `--domain-pubkey`
+- `--domain-pubkey` - Path to domain public key (default: `./keys/domain.pub`)
+
+**Example:**
+```bash
+# Query using domain public key
+./ops get-validator-info \
+  --rpc-endpoint http://127.0.0.1:18100
+
+# Query using specific pool ID
+./ops get-validator-info \
+  --pool-id 46a7519c6664387c8cc603a2e406e3f46d32c3326af5343302bb3178526ecc3b \
+  --rpc-endpoint http://127.0.0.1:18100
+```
+
+**Output:**
+```
+=== Validator Information ===
+Pool ID:              46a7519c6664387c8cc603a2e406e3f46d32c3326af5343302bb3178526ecc3b
+Description:          my-validator
+Owner:                0x1234567890abcdef1234567890abcdef12345678
+Endpoint:             tcp://47.84.7.245:19000
+Status:               1
+Public Key:           0x1003abc123...
+BLS Public Key:       0x4003def456...
+
+=== Staking Information ===
+Total Stake:          1000000000000000000000000 wei
+Stake Snapshot:       1000000000000000000000000 wei
+Pending Withdraw:     0 wei
+Withdraw Window:      0 epochs
+
+=== Commission & Delegation ===
+Commission Rate:      1000 basis points (10.00%)
+Delegation Enabled:   true
+```
+
 ## Complete Deployment Flow
 
 ### New Node Deployment
@@ -238,13 +385,16 @@ Validator exit success
 # 2. Generate keys
 ./ops generate-keys
 
-# 3. Bootstrap
+# 3. Get Node ID (optional, for reference)
+./ops get-nodeid
+
+# 4. Bootstrap
 ./ops bootstrap --config ./pharos.conf
 
-# 4. Start node
+# 5. Start node
 ./ops start --config ./pharos.conf
 
-# 5. Register as validator (optional)
+# 6. Register as validator (optional)
 export VALIDATOR_PRIVATE_KEY=YOUR_PRIVATE_KEY_HERE
 PUBLIC_IP=$(curl -s ifconfig.me)
 ./ops add-validator \
@@ -252,6 +402,16 @@ PUBLIC_IP=$(curl -s ifconfig.me)
   --domain-label my-validator \
   --domain-endpoint tcp://$PUBLIC_IP:19000 \
   --stake 1000000
+
+# 7. Configure staking settings (optional)
+# Enable delegation
+./ops set-delegation --enabled=true
+
+# Set commission rate to 10%
+./ops set-commission-rate --rate 1000
+
+# 8. Verify validator info
+./ops get-validator-info
 ```
 
 ## Command Reference
@@ -268,7 +428,7 @@ PUBLIC_IP=$(curl -s ifconfig.me)
 | Command | Description |
 |---------|-------------|
 | `generate-keys` | Generate domain and stabilizing keys |
-| `get-nodeid` | Get Node ID from domain public key |
+| `get-nodeid` | Get Node ID / Pool ID from domain public key |
 
 ### Node Operations
 
@@ -284,6 +444,14 @@ PUBLIC_IP=$(curl -s ifconfig.me)
 |---------|-------------|
 | `add-validator` | Register as validator |
 | `exit-validator` | Exit from validator set |
+
+### Staking Operations
+
+| Command | Description |
+|---------|-------------|
+| `set-delegation` | Enable or disable delegation for your validator |
+| `set-commission-rate` | Set commission rate (0-10000 basis points) |
+| `get-validator-info` | Query validator information, staking details, and settings |
 
 ## Configuration Files
 
@@ -387,11 +555,20 @@ If validator commands fail with connection errors:
 
 ### Transaction failed
 
-If validator registration fails:
+If validator registration or staking commands fail:
 - Ensure the account has sufficient balance for gas fees
 - Check that the private key is correct (64 hex characters, with or without 0x prefix)
 - Verify the `VALIDATOR_PRIVATE_KEY` environment variable is set
 - Verify the network is accepting new validators
+- For staking commands, ensure you are already registered as a validator
+
+### Pool ID vs Node ID
+
+**Pool ID** and **Node ID** are the same value, just with different formatting:
+- **Node ID**: SHA256 hash of domain public key, displayed without prefix (e.g., `abc123...`)
+- **Pool ID**: Same hash but with `0x` prefix for smart contract calls (e.g., `0xabc123...`)
+
+Use `./ops get-nodeid --format 0x` to get the Pool ID format for contract interactions.
 
 ## Development
 
