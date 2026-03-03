@@ -13,12 +13,13 @@ import (
 
 var (
 	getNodeIDKeysDir string
+	getNodeIDFormat  string
 )
 
 var getNodeIDCmd = &cobra.Command{
 	Use:   "get-nodeid",
-	Short: "Get the Node ID from domain public key",
-	Long:  "Calculate and display the Node ID by hashing the domain public key (sha256)",
+	Short: "Get the Node ID (Pool ID) from domain public key",
+	Long:  "Calculate and display the Node ID / Pool ID by hashing the domain public key (sha256)",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		pubKeyPath := filepath.Join(getNodeIDKeysDir, "domain.pub")
 
@@ -51,7 +52,16 @@ var getNodeIDCmd = &cobra.Command{
 		hash := sha256.Sum256(pubKeyBytes)
 		nodeID := hex.EncodeToString(hash[:])
 
-		fmt.Printf("Node ID: %s\n", nodeID)
+		// Format output based on --format flag
+		switch getNodeIDFormat {
+		case "0x", "hex-prefixed":
+			fmt.Printf("Node ID: 0x%s\n", nodeID)
+		case "hex", "":
+			fmt.Printf("Node ID: %s\n", nodeID)
+		default:
+			return fmt.Errorf("invalid format: %s (valid options: hex, 0x)", getNodeIDFormat)
+		}
+
 		return nil
 	},
 }
@@ -61,4 +71,6 @@ func init() {
 
 	getNodeIDCmd.Flags().StringVarP(&getNodeIDKeysDir, "keys-dir", "k", "./keys",
 		"Directory containing the domain.pub file")
+	getNodeIDCmd.Flags().StringVar(&getNodeIDFormat, "format", "hex",
+		"Output format: 'hex' (default, no prefix) or '0x' (with 0x prefix)")
 }

@@ -20,10 +20,6 @@ import (
 )
 
 var (
-	poolIDPubKeyPath string
-)
-
-var (
 	delegationRPCEndpoint string
 	delegationPoolID      string
 	delegationPubKeyPath  string
@@ -44,6 +40,7 @@ var (
 )
 
 // computePoolID reads a domain public key file, strips prefix, and returns the 0x-prefixed SHA256 hash
+// This is the same as Node ID but with 0x prefix for contract calls
 func computePoolID(pubKeyPath string) (string, error) {
 	pubKey, err := readPublicKey(pubKeyPath)
 	if err != nil {
@@ -152,22 +149,6 @@ func sendStakingTx(cmd *cobra.Command, rpcEndpoint string, data []byte) error {
 		fmt.Println("Transaction failed")
 	}
 	return nil
-}
-
-// ==================== get-pool-id ====================
-
-var getPoolIDCmd = &cobra.Command{
-	Use:   "get-pool-id",
-	Short: "Get the staking pool ID from domain public key",
-	Long:  "Calculate the staking pool ID (0x-prefixed SHA256 hash of the domain public key)",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		poolID, err := computePoolID(poolIDPubKeyPath)
-		if err != nil {
-			return err
-		}
-		fmt.Printf("Pool ID: %s\n", poolID)
-		return nil
-	},
 }
 
 // ==================== set-delegation ====================
@@ -359,13 +340,9 @@ var getValidatorInfoCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.AddCommand(getPoolIDCmd)
 	rootCmd.AddCommand(setDelegationCmd)
 	rootCmd.AddCommand(setCommissionRateCmd)
 	rootCmd.AddCommand(getValidatorInfoCmd)
-
-	// get-pool-id flags
-	getPoolIDCmd.Flags().StringVar(&poolIDPubKeyPath, "domain-pubkey", "./keys/domain.pub", "Path to domain public key file")
 
 	// set-delegation flags
 	setDelegationCmd.Flags().StringVar(&delegationRPCEndpoint, "rpc-endpoint", "http://127.0.0.1:18100", "RPC endpoint URL")
