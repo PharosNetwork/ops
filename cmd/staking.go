@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
@@ -34,6 +35,12 @@ var (
 	commissionPoolID      string
 	commissionPubKeyPath  string
 	commissionRate        uint64
+)
+
+var (
+	getInfoRPCEndpoint string
+	getInfoPoolID      string
+	getInfoPubKeyPath  string
 )
 
 // computePoolID reads a domain public key file, strips prefix, and returns the 0x-prefixed SHA256 hash
@@ -225,10 +232,137 @@ var setCommissionRateCmd = &cobra.Command{
 	},
 }
 
+// ==================== get-validator-info ====================
+
+var getValidatorInfoCmd = &cobra.Command{
+	Use:   "get-validator-info",
+	Short: "Get validator information from the staking contract",
+	Long:  "Query validator details, commission rate, and delegation status",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		poolIDBytes32, err := resolvePoolID(getInfoPoolID, getInfoPubKeyPath)
+		if err != nil {
+			return err
+		}
+
+		client, err := ethclient.Dial(getInfoRPCEndpoint)
+		if err != nil {
+			return fmt.Errorf("failed to connect to endpoint: %w", err)
+		}
+		defer client.Close()
+
+		parsedABI, err := abi.JSON(strings.NewReader(stakingABI))
+		if err != nil {
+			return fmt.Errorf("failed to parse ABI: %w", err)
+		}
+
+		contractAddr := common.HexToAddress(stakingAddress)
+
+		// Call getValidator
+		validatorData, err := parsedABI.Pack("getValidator", poolIDBytes32)
+		if err != nil {
+			return fmt.Errorf("failed to pack getValidator call: %w", err)
+		}
+
+		validatorResult, err := client.CallContract(cmd.Context(), ethereum.CallMsg{
+			To:   &contractAddr,
+			Data: validatorData,
+		}, nil)
+		if err != nil {
+			return fmt.Errorf("failed to call getValidator: %w", err)
+		}
+
+		var validator struct {
+			Description           string
+			PublicKey             string
+			PublicKeyPop          string
+			BlsPublicKey          string
+			BlsPublicKeyPop       string
+			Endpoint              string
+			Status                uint8
+			PoolId                [32]byte
+			TotalStake            *big.Int
+			Owner                 common.Address
+			StakeSnapshot         *big.Int
+			PendingWithdrawStake  *big.Int
+			PendingWithdrawWindow uint8
+			PendingOwner          common.Address
+		}
+
+		err = parsedABI.UnpackIntoInterface(&validator, "getValidator", validatorResult)
+		if err != nil {
+			return fmt.Errorf("failed to unpack getValidator result: %w", err)
+		}
+
+		// Call getCommissionRate
+		commissionData, err := parsedABI.Pack("getCommissionRate", poolIDBytes32)
+		if err != nil {
+			return fmt.Errorf("failed to pack getCommissionRate call: %w", err)
+		}
+
+		commissionResult, err := client.CallContract(cmd.Context(), ethereum.CallMsg{
+			To:   &contractAddr,
+			Data: commissionData,
+		}, nil)
+		if err != nil {
+			return fmt.Errorf("failed to call getCommissionRate: %w", err)
+		}
+
+		var commissionRateBig *big.Int
+		err = parsedABI.UnpackIntoInterface(&commissionRateBig, "getCommissionRate", commissionResult)
+		if err != nil {
+			return fmt.Errorf("failed to unpack getCommissionRate result: %w", err)
+		}
+
+		// Call delegationEnabledMapping
+		delegationData, err := parsedABI.Pack("delegationEnabledMapping", poolIDBytes32)
+		if err != nil {
+			return fmt.Errorf("failed to pack delegationEnabledMapping call: %w", err)
+		}
+
+		delegationResult, err := client.CallContract(cmd.Context(), ethereum.CallMsg{
+			To:   &contractAddr,
+			Data: delegationData,
+		}, nil)
+		if err != nil {
+			return fmt.Errorf("failed to call delegationEnabledMapping: %w", err)
+		}
+
+		var delegationEnabled bool
+		err = parsedABI.UnpackIntoInterface(&delegationEnabled, "delegationEnabledMapping", delegationResult)
+		if err != nil {
+			return fmt.Errorf("failed to unpack delegationEnabledMapping result: %w", err)
+		}
+
+		// Format and print results
+		fmt.Println("=== Validator Information ===")
+		fmt.Printf("Pool ID:              %s\n", hex.EncodeToString(validator.PoolId[:]))
+		fmt.Printf("Description:          %s\n", validator.Description)
+		fmt.Printf("Owner:                %s\n", validator.Owner.Hex())
+		fmt.Printf("Endpoint:             %s\n", validator.Endpoint)
+		fmt.Printf("Status:               %d\n", validator.Status)
+		fmt.Printf("Public Key:           %s\n", validator.PublicKey)
+		fmt.Printf("BLS Public Key:       %s\n", validator.BlsPublicKey)
+		fmt.Println()
+		fmt.Println("=== Staking Information ===")
+		fmt.Printf("Total Stake:          %s wei\n", validator.TotalStake.String())
+		fmt.Printf("Stake Snapshot:       %s wei\n", validator.StakeSnapshot.String())
+		fmt.Printf("Pending Withdraw:     %s wei\n", validator.PendingWithdrawStake.String())
+		fmt.Printf("Withdraw Window:      %d epochs\n", validator.PendingWithdrawWindow)
+		fmt.Println()
+		fmt.Println("=== Commission & Delegation ===")
+		commissionRateValue := commissionRateBig.Uint64()
+		fmt.Printf("Commission Rate:      %d basis points (%.2f%%)\n", commissionRateValue, float64(commissionRateValue)/100.0)
+		fmt.Printf("Delegation Enabled:   %v\n", delegationEnabled)
+
+		return nil
+	},
+}
+
 func init() {
 	rootCmd.AddCommand(getPoolIDCmd)
 	rootCmd.AddCommand(setDelegationCmd)
 	rootCmd.AddCommand(setCommissionRateCmd)
+	rootCmd.AddCommand(getValidatorInfoCmd)
 
 	// get-pool-id flags
 	getPoolIDCmd.Flags().StringVar(&poolIDPubKeyPath, "domain-pubkey", "./keys/domain.pub", "Path to domain public key file")
@@ -245,4 +379,9 @@ func init() {
 	setCommissionRateCmd.Flags().StringVar(&commissionPubKeyPath, "domain-pubkey", "./keys/domain.pub", "Path to domain public key file (used if --pool-id is empty)")
 	setCommissionRateCmd.Flags().Uint64Var(&commissionRate, "rate", 0, "Commission rate in basis points (0-10000, where 10000 = 100%)")
 	setCommissionRateCmd.MarkFlagRequired("rate")
+
+	// get-validator-info flags
+	getValidatorInfoCmd.Flags().StringVar(&getInfoRPCEndpoint, "rpc-endpoint", "http://127.0.0.1:18100", "RPC endpoint URL")
+	getValidatorInfoCmd.Flags().StringVar(&getInfoPoolID, "pool-id", "", "Pool ID (hex). If empty, computed from domain-pubkey")
+	getValidatorInfoCmd.Flags().StringVar(&getInfoPubKeyPath, "domain-pubkey", "./keys/domain.pub", "Path to domain public key file (used if --pool-id is empty)")
 }
