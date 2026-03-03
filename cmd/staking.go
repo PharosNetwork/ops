@@ -252,7 +252,18 @@ var getValidatorInfoCmd = &cobra.Command{
 			return fmt.Errorf("failed to call getValidator: %w", err)
 		}
 
-		var validator struct {
+		// Unpack the result - getValidator returns a tuple
+		results, err := parsedABI.Unpack("getValidator", validatorResult)
+		if err != nil {
+			return fmt.Errorf("failed to unpack getValidator result: %w", err)
+		}
+
+		if len(results) == 0 {
+			return fmt.Errorf("no results returned from getValidator")
+		}
+
+		// Extract the tuple fields manually
+		validatorTuple := results[0].(struct {
 			Description           string
 			PublicKey             string
 			PublicKeyPop          string
@@ -267,12 +278,7 @@ var getValidatorInfoCmd = &cobra.Command{
 			PendingWithdrawStake  *big.Int
 			PendingWithdrawWindow uint8
 			PendingOwner          common.Address
-		}
-
-		err = parsedABI.UnpackIntoInterface(&validator, "getValidator", validatorResult)
-		if err != nil {
-			return fmt.Errorf("failed to unpack getValidator result: %w", err)
-		}
+		})
 
 		// Call getCommissionRate
 		commissionData, err := parsedABI.Pack("getCommissionRate", poolIDBytes32)
@@ -316,19 +322,19 @@ var getValidatorInfoCmd = &cobra.Command{
 
 		// Format and print results
 		fmt.Println("=== Validator Information ===")
-		fmt.Printf("Pool ID:              %s\n", hex.EncodeToString(validator.PoolId[:]))
-		fmt.Printf("Description:          %s\n", validator.Description)
-		fmt.Printf("Owner:                %s\n", validator.Owner.Hex())
-		fmt.Printf("Endpoint:             %s\n", validator.Endpoint)
-		fmt.Printf("Status:               %d\n", validator.Status)
-		fmt.Printf("Public Key:           %s\n", validator.PublicKey)
-		fmt.Printf("BLS Public Key:       %s\n", validator.BlsPublicKey)
+		fmt.Printf("Pool ID:              %s\n", hex.EncodeToString(validatorTuple.PoolId[:]))
+		fmt.Printf("Description:          %s\n", validatorTuple.Description)
+		fmt.Printf("Owner:                %s\n", validatorTuple.Owner.Hex())
+		fmt.Printf("Endpoint:             %s\n", validatorTuple.Endpoint)
+		fmt.Printf("Status:               %d\n", validatorTuple.Status)
+		fmt.Printf("Public Key:           %s\n", validatorTuple.PublicKey)
+		fmt.Printf("BLS Public Key:       %s\n", validatorTuple.BlsPublicKey)
 		fmt.Println()
 		fmt.Println("=== Staking Information ===")
-		fmt.Printf("Total Stake:          %s wei\n", validator.TotalStake.String())
-		fmt.Printf("Stake Snapshot:       %s wei\n", validator.StakeSnapshot.String())
-		fmt.Printf("Pending Withdraw:     %s wei\n", validator.PendingWithdrawStake.String())
-		fmt.Printf("Withdraw Window:      %d epochs\n", validator.PendingWithdrawWindow)
+		fmt.Printf("Total Stake:          %s wei\n", validatorTuple.TotalStake.String())
+		fmt.Printf("Stake Snapshot:       %s wei\n", validatorTuple.StakeSnapshot.String())
+		fmt.Printf("Pending Withdraw:     %s wei\n", validatorTuple.PendingWithdrawStake.String())
+		fmt.Printf("Withdraw Window:      %d epochs\n", validatorTuple.PendingWithdrawWindow)
 		fmt.Println()
 		fmt.Println("=== Commission & Delegation ===")
 		commissionRateValue := commissionRateBig.Uint64()
