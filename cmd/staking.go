@@ -281,53 +281,35 @@ var getValidatorInfoCmd = &cobra.Command{
 			return fmt.Errorf("no results returned from getValidator")
 		}
 
-		// Type assert to our struct - try with exact spacing
-		validatorInterface, ok := results[0].(struct {
-			Description           string
-			PublicKey             string
-			PublicKeyPop          string
-			BlsPublicKey          string
-			BlsPublicKeyPop       string
-			Endpoint              string
-			Status                uint8
-			PoolId                [32]byte
-			TotalStake            *big.Int
-			Owner                 common.Address
-			StakeSnapshot         *big.Int
-			PendingWithdrawStake  *big.Int
-			PendingWithdrawWindow uint8
-			PendingOwner          common.Address
-		})
-		if !ok {
-			// If type assert fails, use reflection to debug and extract
-			v := reflect.ValueOf(results[0])
-			fmt.Printf("DEBUG: Type is %v, Kind is %v\n", v.Type(), v.Kind())
-			if v.Kind() == reflect.Struct {
-				fmt.Printf("DEBUG: Struct has %d fields\n", v.NumField())
-				for i := 0; i < v.NumField(); i++ {
-					field := v.Type().Field(i)
-					fmt.Printf("  Field %d: %s (type: %v)\n", i, field.Name, field.Type)
-				}
-			}
-			return fmt.Errorf("failed to type assert validator result")
+		// Use reflection to extract fields (type assertion fails due to json tags)
+		v := reflect.ValueOf(results[0])
+		if v.Kind() != reflect.Struct {
+			return fmt.Errorf("expected struct, got %v", v.Kind())
 		}
 
-		// Copy to our named struct for cleaner access
+		// Extract fields by name using reflection
 		validator := ValidatorInfo{
-			Description:           validatorInterface.Description,
-			PublicKey:             validatorInterface.PublicKey,
-			PublicKeyPop:          validatorInterface.PublicKeyPop,
-			BlsPublicKey:          validatorInterface.BlsPublicKey,
-			BlsPublicKeyPop:       validatorInterface.BlsPublicKeyPop,
-			Endpoint:              validatorInterface.Endpoint,
-			Status:                validatorInterface.Status,
-			PoolId:                validatorInterface.PoolId,
-			TotalStake:            validatorInterface.TotalStake,
-			Owner:                 validatorInterface.Owner,
-			StakeSnapshot:         validatorInterface.StakeSnapshot,
-			PendingWithdrawStake:  validatorInterface.PendingWithdrawStake,
-			PendingWithdrawWindow: validatorInterface.PendingWithdrawWindow,
-			PendingOwner:          validatorInterface.PendingOwner,
+			Description:           v.FieldByName("Description").String(),
+			PublicKey:             v.FieldByName("PublicKey").String(),
+			PublicKeyPop:          v.FieldByName("PublicKeyPop").String(),
+			BlsPublicKey:          v.FieldByName("BlsPublicKey").String(),
+			BlsPublicKeyPop:       v.FieldByName("BlsPublicKeyPop").String(),
+			Endpoint:              v.FieldByName("Endpoint").String(),
+			Status:                uint8(v.FieldByName("Status").Uint()),
+			TotalStake:            v.FieldByName("TotalStake").Interface().(*big.Int),
+			Owner:                 v.FieldByName("Owner").Interface().(common.Address),
+			StakeSnapshot:         v.FieldByName("StakeSnapshot").Interface().(*big.Int),
+			PendingWithdrawStake:  v.FieldByName("PendingWithdrawStake").Interface().(*big.Int),
+			PendingWithdrawWindow: uint8(v.FieldByName("PendingWithdrawWindow").Uint()),
+			PendingOwner:          v.FieldByName("PendingOwner").Interface().(common.Address),
+		}
+
+		// Extract PoolId array
+		poolIdField := v.FieldByName("PoolId")
+		if poolIdField.Kind() == reflect.Array && poolIdField.Len() == 32 {
+			for i := 0; i < 32; i++ {
+				validator.PoolId[i] = uint8(poolIdField.Index(i).Uint())
+			}
 		}
 
 		// Call getCommissionRate
