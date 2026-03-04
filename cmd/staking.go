@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"reflect"
 	"strings"
 
 	"github.com/ethereum/go-ethereum"
@@ -280,7 +281,7 @@ var getValidatorInfoCmd = &cobra.Command{
 			return fmt.Errorf("no results returned from getValidator")
 		}
 
-		// Type assert to our struct
+		// Type assert to our struct - try with exact spacing
 		validatorInterface, ok := results[0].(struct {
 			Description           string
 			PublicKey             string
@@ -298,6 +299,16 @@ var getValidatorInfoCmd = &cobra.Command{
 			PendingOwner          common.Address
 		})
 		if !ok {
+			// If type assert fails, use reflection to debug and extract
+			v := reflect.ValueOf(results[0])
+			fmt.Printf("DEBUG: Type is %v, Kind is %v\n", v.Type(), v.Kind())
+			if v.Kind() == reflect.Struct {
+				fmt.Printf("DEBUG: Struct has %d fields\n", v.NumField())
+				for i := 0; i < v.NumField(); i++ {
+					field := v.Type().Field(i)
+					fmt.Printf("  Field %d: %s (type: %v)\n", i, field.Name, field.Type)
+				}
+			}
 			return fmt.Errorf("failed to type assert validator result")
 		}
 
