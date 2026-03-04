@@ -270,11 +270,53 @@ var getValidatorInfoCmd = &cobra.Command{
 			return fmt.Errorf("failed to call getValidator: %w", err)
 		}
 
-		// Unpack into our struct
-		var validator ValidatorInfo
-		err = parsedABI.UnpackIntoInterface(&validator, "getValidator", validatorResult)
+		// Unpack the result - returns []interface{} where first element is the struct
+		results, err := parsedABI.Unpack("getValidator", validatorResult)
 		if err != nil {
 			return fmt.Errorf("failed to unpack getValidator result: %w", err)
+		}
+
+		if len(results) == 0 {
+			return fmt.Errorf("no results returned from getValidator")
+		}
+
+		// Type assert to our struct
+		validatorInterface, ok := results[0].(struct {
+			Description           string
+			PublicKey             string
+			PublicKeyPop          string
+			BlsPublicKey          string
+			BlsPublicKeyPop       string
+			Endpoint              string
+			Status                uint8
+			PoolId                [32]byte
+			TotalStake            *big.Int
+			Owner                 common.Address
+			StakeSnapshot         *big.Int
+			PendingWithdrawStake  *big.Int
+			PendingWithdrawWindow uint8
+			PendingOwner          common.Address
+		})
+		if !ok {
+			return fmt.Errorf("failed to type assert validator result")
+		}
+
+		// Copy to our named struct for cleaner access
+		validator := ValidatorInfo{
+			Description:           validatorInterface.Description,
+			PublicKey:             validatorInterface.PublicKey,
+			PublicKeyPop:          validatorInterface.PublicKeyPop,
+			BlsPublicKey:          validatorInterface.BlsPublicKey,
+			BlsPublicKeyPop:       validatorInterface.BlsPublicKeyPop,
+			Endpoint:              validatorInterface.Endpoint,
+			Status:                validatorInterface.Status,
+			PoolId:                validatorInterface.PoolId,
+			TotalStake:            validatorInterface.TotalStake,
+			Owner:                 validatorInterface.Owner,
+			StakeSnapshot:         validatorInterface.StakeSnapshot,
+			PendingWithdrawStake:  validatorInterface.PendingWithdrawStake,
+			PendingWithdrawWindow: validatorInterface.PendingWithdrawWindow,
+			PendingOwner:          validatorInterface.PendingOwner,
 		}
 
 		// Call getCommissionRate
