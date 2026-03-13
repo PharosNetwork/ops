@@ -111,9 +111,9 @@ func checkUlimit() []checkResult {
 
 	status := "✅"
 	detail := ulimitStr
-	if ulimitVal < 655350 {
+	if ulimitVal < 10000000 {
 		status = "❌"
-		detail = fmt.Sprintf("%s (required >= 655350)", ulimitStr)
+		detail = fmt.Sprintf("%s (required >= 10000000)", ulimitStr)
 	}
 	results = append(results, checkResult{"Ulimit (open files)", status, detail})
 	return results
