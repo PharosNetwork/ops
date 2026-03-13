@@ -61,7 +61,24 @@ var healthCheckCmd = &cobra.Command{
 		results = append(results, checkNodeID(hcKeysDir))
 
 		// 5. Validator status
-		results = append(results, checkValidatorStatus(cmd, hcKeysDir, hcRPCEndpoint))
+		// Determine RPC endpoint: if user didn't specify, pick based on network
+		rpcEndpoint := hcRPCEndpoint
+		if rpcEndpoint == "" {
+			// Detect network from spec version results
+			isAtlantic := false
+			for _, r := range results {
+				if r.Item == "Network" && r.Detail == "Atlantic" {
+					isAtlantic = true
+					break
+				}
+			}
+			if isAtlantic {
+				rpcEndpoint = "https://atlantic-rpc.dplabs-internal.com"
+			} else {
+				rpcEndpoint = "https://rpc.pharos.xyz"
+			}
+		}
+		results = append(results, checkValidatorStatus(cmd, hcKeysDir, rpcEndpoint))
 
 		// Print table
 		fmt.Println()
@@ -83,27 +100,17 @@ var healthCheckCmd = &cobra.Command{
 func checkUlimit() []checkResult {
 	var results []checkResult
 
-	// Try reading /proc/sys/fs/file-max first (Linux), fallback to ulimit -n
-	var ulimitVal uint64
-	var ulimitStr string
-
-	data, err := os.ReadFile("/proc/sys/fs/file-max")
-	if err == nil {
-		ulimitStr = strings.TrimSpace(string(data))
-		ulimitVal, _ = strconv.ParseUint(ulimitStr, 10, 64)
-	} else {
-		// Fallback: execute ulimit -n
-		out, err := exec.Command("bash", "-c", "ulimit -n").Output()
-		if err != nil {
-			results = append(results, checkResult{"Ulimit (open files)", "❌", fmt.Sprintf("failed to get ulimit: %v", err)})
-			return results
-		}
-		ulimitStr = strings.TrimSpace(string(out))
-		ulimitVal, _ = strconv.ParseUint(ulimitStr, 10, 64)
+	// Use ulimit -n to get per-process open file limit
+	out, err := exec.Command("bash", "-c", "ulimit -n").Output()
+	if err != nil {
+		results = append(results, checkResult{"Ulimit (open files)", "❌", fmt.Sprintf("failed to get ulimit: %v", err)})
+		return results
 	}
+	ulimitStr := strings.TrimSpace(string(out))
+	ulimitVal, _ := strconv.ParseUint(ulimitStr, 10, 64)
 
 	status := "✅"
-	detail := fmt.Sprintf("%s", ulimitStr)
+	detail := ulimitStr
 	if ulimitVal < 655350 {
 		status = "❌"
 		detail = fmt.Sprintf("%s (required >= 655350)", ulimitStr)
@@ -259,10 +266,11 @@ func checkSpecVersion(binDir string) []checkResult {
 // ==================== 3. Binary version ====================
 
 func checkBinaryVersion(binDir string) checkResult {
-	// Run: cd bin && LD_PRELOAD=./libevmone.so ./pharos_light --version
-	cmdExec := exec.Command(filepath.Join(binDir, "pharos_light"), "--version")
-	cmdExec.Env = append(os.Environ(), fmt.Sprintf("LD_PRELOAD=%s", filepath.Join(binDir, "libevmone.so")))
-	cmdExec.Dir = binDir
+	// Run: LD_PRELOAD=./bin/libevmone.so ./bin/pharos_light --version
+	binaryPath := filepath.Join(binDir, "pharos_light")
+	libPath := filepath.Join(binDir, "libevmone.so")
+	cmdExec := exec.Command(binaryPath, "--version")
+	cmdExec.Env = append(os.Environ(), fmt.Sprintf("LD_PRELOAD=%s", libPath))
 
 	out, err := cmdExec.CombinedOutput()
 	if err != nil {
@@ -393,5 +401,5 @@ func init() {
 
 	healthCheckCmd.Flags().StringVarP(&hcKeysDir, "keys-dir", "k", "./keys", "Directory containing domain.pub")
 	healthCheckCmd.Flags().StringVar(&hcBinDir, "bin-dir", "./bin", "Directory containing pharos_light and VERSION")
-	healthCheckCmd.Flags().StringVar(&hcRPCEndpoint, "rpc-endpoint", "http://127.0.0.1:18100", "RPC endpoint URL")
+	healthCheckCmd.Flags().StringVar(&hcRPCEndpoint, "rpc-endpoint", "", "RPC endpoint URL (auto-detect if empty: atlantic->atlantic-rpc.dplabs-internal.com, mainnet->rpc.pharos.xyz)")
 }
