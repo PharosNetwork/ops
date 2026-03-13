@@ -73,7 +73,7 @@ var healthCheckCmd = &cobra.Command{
 				}
 			}
 			if isAtlantic {
-				rpcEndpoint = "https://atlantic-rpc.dplabs-internal.com"
+				rpcEndpoint = "https://atlantic.dplabs-internal.com"
 			} else {
 				rpcEndpoint = "https://rpc.pharos.xyz"
 			}
