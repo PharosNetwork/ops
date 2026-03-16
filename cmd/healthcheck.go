@@ -562,27 +562,27 @@ var networkTestCmd = &cobra.Command{
 		}
 
 		// TCP latency test
-		fmt.Printf("Found %d validators, starting TCP latency test (port %s, %d probes each)...\n\n", len(endpoints), ntPort, ntCount)
+		// Filter out validators with invalid endpoints
+		var validEndpoints []validatorEndpoint
+		var skippedCount int
+		for _, ep := range endpoints {
+			target := parseEndpoint(ep.Endpoint, ntPort)
+			if target == "" {
+				skippedCount++
+				continue
+			}
+			validEndpoints = append(validEndpoints, ep)
+		}
+
+		fmt.Printf("Found %d validators (%d with valid endpoints, %d skipped), TCP latency test (%d probes each)...\n\n",
+			len(endpoints), len(validEndpoints), skippedCount, ntCount)
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
 		fmt.Fprintln(w, "VALIDATOR\tENDPOINT\tMIN\tAVG\tMAX\tSTATUS")
 		fmt.Fprintln(w, "---------\t--------\t---\t---\t---\t------")
 
-		for _, ep := range endpoints {
-			host := ep.Endpoint
-			// Strip protocol prefix if present
-			host = strings.TrimPrefix(host, "http://")
-			host = strings.TrimPrefix(host, "https://")
-			// Strip path
-			if idx := strings.Index(host, "/"); idx > 0 {
-				host = host[:idx]
-			}
-			// Strip existing port if any
-			if h, _, err := net.SplitHostPort(host); err == nil {
-				host = h
-			}
-
-			target := net.JoinHostPort(host, ntPort)
+		for _, ep := range validEndpoints {
+			target := parseEndpoint(ep.Endpoint, ntPort)
 
 			var latencies []time.Duration
 			var failCount int
@@ -631,6 +631,38 @@ var networkTestCmd = &cobra.Command{
 
 		return nil
 	},
+}
+
+// parseEndpoint extracts host:port from endpoint string like "tcp://1.2.3.4:19000"
+// Returns empty string if endpoint is invalid (no IP/hostname)
+func parseEndpoint(endpoint string, defaultPort string) string {
+	host := endpoint
+	// Strip protocol prefixes
+	host = strings.TrimPrefix(host, "tcp://")
+	host = strings.TrimPrefix(host, "http://")
+	host = strings.TrimPrefix(host, "https://")
+
+	// Strip path
+	if idx := strings.Index(host, "/"); idx >= 0 {
+		host = host[:idx]
+	}
+
+	// Try to split host:port
+	h, p, err := net.SplitHostPort(host)
+	if err == nil {
+		host = h
+		if p != "" {
+			defaultPort = p
+		}
+	}
+
+	// Validate: must have a real hostname or IP (not empty, not just "tcp", etc.)
+	host = strings.TrimSpace(host)
+	if host == "" || host == "tcp" || host == "http" || host == "https" {
+		return ""
+	}
+
+	return net.JoinHostPort(host, defaultPort)
 }
 
 func formatDuration(d time.Duration) string {
