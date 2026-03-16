@@ -34,7 +34,12 @@ const (
 	mainnetVersionURL  = "https://raw.githubusercontent.com/PharosNetwork/resources/main/mainnet.version"
 )
 
-type checkResult struct {
+type infoItem struct {
+	Item  string
+	Value string
+}
+
+type checkItem struct {
 	Item   string
 	Status string // ✅ or ❌
 	Detail string
@@ -43,93 +48,109 @@ type checkResult struct {
 var healthCheckCmd = &cobra.Command{
 	Use:   "health-check",
 	Short: "Run node health checks",
-	Long:  "Perform a series of self-checks on the node: ulimit, CPU/memory, spec version, binary version, node ID, validator status",
+	Long:  "Perform a series of self-checks on the node: system info, ulimit, spec version, binary version, node ID, validator status",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		var results []checkResult
+		var infos []infoItem
+		var checks []checkItem
 
-		// 1. System resources: ulimit, CPU, memory
-		results = append(results, checkUlimit()...)
-		results = append(results, checkSystemResources()...)
+		// === INFO section ===
+		// Network (detect from VERSION file)
+		network := detectNetwork(hcBinDir)
+		infos = append(infos, infoItem{"Network", network})
 
-		// 2. Spec version check
-		results = append(results, checkSpecVersion(hcBinDir)...)
+		// CPU
+		infos = append(infos, infoItem{"CPU Cores", fmt.Sprintf("%d", runtime.NumCPU())})
 
-		// 3. Binary version (pharos_light)
-		results = append(results, checkBinaryVersion(hcBinDir))
+		// Memory
+		infos = append(infos, infoItem{"Memory", getMemoryInfo()})
 
-		// 4. Node ID
-		results = append(results, checkNodeID(hcKeysDir))
+		// Node ID
+		nodeID, nodeIDErr := getNodeIDFromKeys(hcKeysDir)
+		if nodeIDErr != nil {
+			infos = append(infos, infoItem{"Node ID", fmt.Sprintf("error: %v", nodeIDErr)})
+		} else {
+			infos = append(infos, infoItem{"Node ID", nodeID})
+		}
 
-		// 5. Validator status
-		// Determine RPC endpoint: if user didn't specify, pick based on network
+		// Validator status
 		rpcEndpoint := hcRPCEndpoint
 		if rpcEndpoint == "" {
-			// Detect network from spec version results
-			isAtlantic := false
-			for _, r := range results {
-				if r.Item == "Network" && r.Detail == "Atlantic" {
-					isAtlantic = true
-					break
-				}
-			}
-			if isAtlantic {
+			if strings.Contains(strings.ToLower(network), "atlantic") {
 				rpcEndpoint = "https://atlantic.dplabs-internal.com"
 			} else {
 				rpcEndpoint = "https://rpc.pharos.xyz"
 			}
 		}
-		results = append(results, checkValidatorStatus(cmd, hcKeysDir, rpcEndpoint))
+		validatorStr := getValidatorStatus(cmd, hcKeysDir, rpcEndpoint)
+		infos = append(infos, infoItem{"Validator", validatorStr})
 
-		// Print table
+		// === CHECK section ===
+		// Ulimit
+		checks = append(checks, checkUlimit()...)
+
+		// Spec Version
+		checks = append(checks, checkSpecVersion(hcBinDir)...)
+
+		// Binary Version
+		checks = append(checks, checkBinaryVersion(hcBinDir))
+
+		// Print INFO table
 		fmt.Println()
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-		fmt.Fprintln(w, "CHECK ITEM\tSTATUS\tDETAIL")
-		fmt.Fprintln(w, "----------\t------\t------")
-		for _, r := range results {
-			fmt.Fprintf(w, "%s\t%s\t%s\n", r.Item, r.Status, r.Detail)
+		fmt.Println("📋 NODE INFO")
+		fmt.Println(strings.Repeat("─", 60))
+		wi := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+		for _, info := range infos {
+			fmt.Fprintf(wi, "  %s\t%s\n", info.Item, info.Value)
 		}
-		w.Flush()
+		wi.Flush()
+
+		// Print CHECK table
 		fmt.Println()
+		fmt.Println("🔍 HEALTH CHECK")
+		fmt.Println(strings.Repeat("─", 60))
+		wc := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+		for _, c := range checks {
+			fmt.Fprintf(wc, "  %s %s\t%s\n", c.Status, c.Item, c.Detail)
+		}
+		wc.Flush()
+		fmt.Println()
+
+		// Summary
+		failCount := 0
+		for _, c := range checks {
+			if c.Status == "❌" {
+				failCount++
+			}
+		}
+		if failCount > 0 {
+			fmt.Printf("⚠️  %d check(s) failed. Please fix the issues above.\n\n", failCount)
+		} else {
+			fmt.Println("✅ All checks passed.")
+		}
 
 		return nil
 	},
 }
 
-// ==================== 1. ulimit check ====================
+// ==================== INFO helpers ====================
 
-func checkUlimit() []checkResult {
-	var results []checkResult
-
-	// Use ulimit -n to get per-process open file limit
-	out, err := exec.Command("bash", "-c", "ulimit -n").Output()
+func detectNetwork(binDir string) string {
+	versionPath := filepath.Join(binDir, "VERSION")
+	data, err := os.ReadFile(versionPath)
 	if err != nil {
-		results = append(results, checkResult{"Ulimit (open files)", "❌", fmt.Sprintf("failed to get ulimit: %v", err)})
-		return results
+		return "unknown"
 	}
-	ulimitStr := strings.TrimSpace(string(out))
-	ulimitVal, _ := strconv.ParseUint(ulimitStr, 10, 64)
-
-	status := "✅"
-	detail := ulimitStr
-	if ulimitVal < 10000000 {
-		status = "❌"
-		detail = fmt.Sprintf("%s (required >= 10000000)", ulimitStr)
+	content := strings.ToLower(string(data))
+	if strings.Contains(content, "atlantic") {
+		return "Atlantic"
 	}
-	results = append(results, checkResult{"Ulimit (open files)", status, detail})
-	return results
+	if strings.Contains(content, "mainnet") {
+		return "Mainnet"
+	}
+	return "unknown"
 }
 
-// ==================== CPU & Memory ====================
-
-func checkSystemResources() []checkResult {
-	var results []checkResult
-
-	// CPU cores
-	cpuCores := runtime.NumCPU()
-	results = append(results, checkResult{"CPU Cores", "✅", fmt.Sprintf("%d", cpuCores)})
-
-	// Memory - try /proc/meminfo (Linux), fallback to sysctl (macOS)
-	memStr := "unknown"
+func getMemoryInfo() string {
 	data, err := os.ReadFile("/proc/meminfo")
 	if err == nil {
 		for _, line := range strings.Split(string(data), "\n") {
@@ -137,169 +158,28 @@ func checkSystemResources() []checkResult {
 				fields := strings.Fields(line)
 				if len(fields) >= 2 {
 					kbVal, _ := strconv.ParseUint(fields[1], 10, 64)
-					gbVal := float64(kbVal) / 1024 / 1024
-					memStr = fmt.Sprintf("%.1f GB", gbVal)
+					return fmt.Sprintf("%.1f GB", float64(kbVal)/1024/1024)
 				}
-				break
 			}
 		}
-	} else {
-		// macOS fallback
-		out, err := exec.Command("sysctl", "-n", "hw.memsize").Output()
-		if err == nil {
-			bytesVal, _ := strconv.ParseUint(strings.TrimSpace(string(out)), 10, 64)
-			gbVal := float64(bytesVal) / 1024 / 1024 / 1024
-			memStr = fmt.Sprintf("%.1f GB", gbVal)
-		}
 	}
-	results = append(results, checkResult{"Memory", "✅", memStr})
-
-	return results
+	// macOS fallback
+	out, err := exec.Command("sysctl", "-n", "hw.memsize").Output()
+	if err == nil {
+		bytesVal, _ := strconv.ParseUint(strings.TrimSpace(string(out)), 10, 64)
+		return fmt.Sprintf("%.1f GB", float64(bytesVal)/1024/1024/1024)
+	}
+	return "unknown"
 }
 
-// ==================== 2. Spec Version check ====================
-
-func checkSpecVersion(binDir string) []checkResult {
-	var results []checkResult
-
-	versionPath := filepath.Join(binDir, "VERSION")
-	localData, err := os.ReadFile(versionPath)
-	if err != nil {
-		results = append(results, checkResult{"Spec Version", "❌", fmt.Sprintf("failed to read %s: %v", versionPath, err)})
-		return results
-	}
-
-	localContent := strings.TrimSpace(string(localData))
-
-	// Parse local version JSON
-	var localVersions map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(localContent), &localVersions); err != nil {
-		results = append(results, checkResult{"Spec Version", "❌", fmt.Sprintf("failed to parse local VERSION: %v", err)})
-		return results
-	}
-
-	// Detect network type by checking keys
-	isAtlantic := false
-	for key := range localVersions {
-		if strings.Contains(strings.ToLower(key), "atlantic") {
-			isAtlantic = true
-			break
-		}
-	}
-
-	var remoteURL string
-	var networkName string
-	if isAtlantic {
-		remoteURL = atlanticVersionURL
-		networkName = "Atlantic"
-	} else {
-		remoteURL = mainnetVersionURL
-		networkName = "Mainnet"
-	}
-
-	results = append(results, checkResult{"Network", "✅", networkName})
-
-	// Fetch remote version
-	resp, err := http.Get(remoteURL)
-	if err != nil {
-		results = append(results, checkResult{"Spec Version", "❌", fmt.Sprintf("failed to fetch remote version: %v", err)})
-		return results
-	}
-	defer resp.Body.Close()
-
-	remoteData, err := io.ReadAll(resp.Body)
-	if err != nil {
-		results = append(results, checkResult{"Spec Version", "❌", fmt.Sprintf("failed to read remote version: %v", err)})
-		return results
-	}
-
-	remoteContent := strings.TrimSpace(string(remoteData))
-
-	// Parse both as map[string]map[string]interface{} for comparison
-	var localMap, remoteMap map[string]map[string]interface{}
-	if err := json.Unmarshal([]byte(localContent), &localMap); err != nil {
-		results = append(results, checkResult{"Spec Version", "❌", fmt.Sprintf("failed to parse local VERSION: %v", err)})
-		return results
-	}
-	if err := json.Unmarshal([]byte(remoteContent), &remoteMap); err != nil {
-		results = append(results, checkResult{"Spec Version", "❌", fmt.Sprintf("failed to parse remote version: %v", err)})
-		return results
-	}
-
-	// Compare
-	matched := true
-	var diffs []string
-
-	// Check all remote entries exist in local with same values
-	for key, remoteVal := range remoteMap {
-		localVal, exists := localMap[key]
-		if !exists {
-			matched = false
-			diffs = append(diffs, fmt.Sprintf("missing local entry: %s", key))
-			continue
-		}
-		remoteJSON, _ := json.Marshal(remoteVal)
-		localJSON, _ := json.Marshal(localVal)
-		if string(remoteJSON) != string(localJSON) {
-			matched = false
-			diffs = append(diffs, fmt.Sprintf("%s: local=%s remote=%s", key, string(localJSON), string(remoteJSON)))
-		}
-	}
-
-	// Check local entries not in remote
-	for key := range localMap {
-		if _, exists := remoteMap[key]; !exists {
-			matched = false
-			diffs = append(diffs, fmt.Sprintf("extra local entry: %s", key))
-		}
-	}
-
-	if matched {
-		results = append(results, checkResult{"Spec Version", "✅", "matches remote"})
-	} else {
-		results = append(results, checkResult{"Spec Version", "❌", fmt.Sprintf("MISMATCH: %s", strings.Join(diffs, "; "))})
-	}
-
-	return results
-}
-
-// ==================== 3. Binary version ====================
-
-func checkBinaryVersion(binDir string) checkResult {
-	// Run: LD_PRELOAD=./bin/libevmone.so ./bin/pharos_light --version
-	binaryPath := filepath.Join(binDir, "pharos_light")
-	libPath := filepath.Join(binDir, "libevmone.so")
-	cmdExec := exec.Command(binaryPath, "--version")
-	cmdExec.Env = append(os.Environ(), fmt.Sprintf("LD_PRELOAD=%s", libPath))
-
-	out, err := cmdExec.CombinedOutput()
-	if err != nil {
-		return checkResult{"Binary Version", "❌", fmt.Sprintf("failed to get version: %v (%s)", err, strings.TrimSpace(string(out)))}
-	}
-
-	versionStr := strings.TrimSpace(string(out))
-	// Extract commit ID: "72eeb262f-dirty" -> "72eeb262f"
-	commitID := versionStr
-	if idx := strings.Index(versionStr, "-"); idx > 0 {
-		commitID = versionStr[:idx]
-	}
-
-	return checkResult{"Binary Version", "✅", fmt.Sprintf("%s (commit: %s)", versionStr, commitID)}
-}
-
-// ==================== 4. Node ID ====================
-
-func checkNodeID(keysDir string) checkResult {
+func getNodeIDFromKeys(keysDir string) (string, error) {
 	pubKeyPath := filepath.Join(keysDir, "domain.pub")
 	pubKeyData, err := os.ReadFile(pubKeyPath)
 	if err != nil {
-		return checkResult{"Node ID", "❌", fmt.Sprintf("failed to read domain.pub: %v", err)}
+		return "", fmt.Errorf("failed to read domain.pub: %v", err)
 	}
 
-	pubKeyHex := strings.TrimSpace(string(pubKeyData))
-
-	// Strip prefix
-	rawPubKey := pubKeyHex
+	rawPubKey := strings.TrimSpace(string(pubKeyData))
 	if strings.HasPrefix(rawPubKey, "0x1003") {
 		rawPubKey = rawPubKey[6:]
 	} else if strings.HasPrefix(rawPubKey, "0x4003") {
@@ -314,52 +194,45 @@ func checkNodeID(keysDir string) checkResult {
 
 	pubKeyBytes, err := hex.DecodeString(rawPubKey)
 	if err != nil {
-		return checkResult{"Node ID", "❌", fmt.Sprintf("failed to decode public key: %v", err)}
+		return "", fmt.Errorf("failed to decode public key: %v", err)
 	}
 
 	hash := sha256.Sum256(pubKeyBytes)
-	nodeID := hex.EncodeToString(hash[:])
-
-	return checkResult{"Node ID", "✅", fmt.Sprintf("0x%s", nodeID)}
+	return fmt.Sprintf("0x%s", hex.EncodeToString(hash[:])), nil
 }
 
-// ==================== 5. Validator status ====================
-
-func checkValidatorStatus(cmd *cobra.Command, keysDir string, rpcEndpoint string) checkResult {
+func getValidatorStatus(cmd *cobra.Command, keysDir string, rpcEndpoint string) string {
 	pubKeyPath := filepath.Join(keysDir, "domain.pub")
 
-	// Compute pool ID
 	poolIDHex, err := computePoolID(pubKeyPath)
 	if err != nil {
-		return checkResult{"Validator", "❌", fmt.Sprintf("failed to compute pool ID: %v", err)}
+		return fmt.Sprintf("❌ (error: %v)", err)
 	}
 
 	poolIDHex = strings.TrimPrefix(poolIDHex, "0x")
 	poolIDBytes, err := hex.DecodeString(poolIDHex)
 	if err != nil {
-		return checkResult{"Validator", "❌", fmt.Sprintf("invalid pool ID: %v", err)}
+		return fmt.Sprintf("❌ (invalid pool ID: %v)", err)
 	}
 
 	var poolIDBytes32 [32]byte
 	copy(poolIDBytes32[:], poolIDBytes)
 
-	// Connect to RPC
 	client, err := ethclient.Dial(rpcEndpoint)
 	if err != nil {
-		return checkResult{"Validator", "❌", fmt.Sprintf("failed to connect to RPC: %v", err)}
+		return fmt.Sprintf("❌ (RPC error: %v)", err)
 	}
 	defer client.Close()
 
 	parsedABI, err := abi.JSON(strings.NewReader(stakingABI))
 	if err != nil {
-		return checkResult{"Validator", "❌", fmt.Sprintf("failed to parse ABI: %v", err)}
+		return fmt.Sprintf("❌ (ABI error: %v)", err)
 	}
 
 	contractAddr := common.HexToAddress(stakingAddress)
-
 	data, err := parsedABI.Pack("getValidator", poolIDBytes32)
 	if err != nil {
-		return checkResult{"Validator", "❌", fmt.Sprintf("failed to pack call: %v", err)}
+		return fmt.Sprintf("❌ (pack error: %v)", err)
 	}
 
 	result, err := client.CallContract(cmd.Context(), ethereum.CallMsg{
@@ -367,33 +240,155 @@ func checkValidatorStatus(cmd *cobra.Command, keysDir string, rpcEndpoint string
 		Data: data,
 	}, nil)
 	if err != nil {
-		return checkResult{"Validator", "❌", fmt.Sprintf("contract call failed: %v", err)}
+		return fmt.Sprintf("❌ (call error: %v)", err)
 	}
 
 	results, err := parsedABI.Unpack("getValidator", result)
 	if err != nil {
-		return checkResult{"Validator", "❌", fmt.Sprintf("failed to unpack: %v", err)}
+		return fmt.Sprintf("❌ (unpack error: %v)", err)
 	}
 
 	if len(results) == 0 {
-		return checkResult{"Validator", "❌", "no result from getValidator"}
+		return "❌ (no result)"
 	}
 
 	v := reflect.ValueOf(results[0])
 	if v.Kind() != reflect.Struct {
-		return checkResult{"Validator", "❌", "unexpected result type"}
+		return "❌ (unexpected type)"
 	}
 
 	statusField := v.FieldByName("Status")
 	if !statusField.IsValid() {
-		return checkResult{"Validator", "❌", "status field not found"}
+		return "❌ (status field not found)"
 	}
 
 	status := uint8(statusField.Uint())
 	if status > 0 {
-		return checkResult{"Validator", "✅", fmt.Sprintf("status=%d (active)", status)}
+		return fmt.Sprintf("✅ (status=%d)", status)
 	}
-	return checkResult{"Validator", "❌", "not a validator (status=0)"}
+	return "❌ (not registered)"
+}
+
+// ==================== CHECK: ulimit ====================
+
+func checkUlimit() []checkItem {
+	out, err := exec.Command("bash", "-c", "ulimit -n").Output()
+	if err != nil {
+		return []checkItem{{"Ulimit (open files)", "❌", fmt.Sprintf("failed to get: %v", err)}}
+	}
+	ulimitStr := strings.TrimSpace(string(out))
+	ulimitVal, _ := strconv.ParseUint(ulimitStr, 10, 64)
+
+	if ulimitVal >= 655350 {
+		return []checkItem{{"Ulimit (open files)", "✅", ulimitStr}}
+	}
+	return []checkItem{{"Ulimit (open files)", "❌", fmt.Sprintf("%s (required >= 655350)", ulimitStr)}}
+}
+
+// ==================== CHECK: Spec Version ====================
+
+func checkSpecVersion(binDir string) []checkItem {
+	versionPath := filepath.Join(binDir, "VERSION")
+	localData, err := os.ReadFile(versionPath)
+	if err != nil {
+		return []checkItem{{"Spec Version", "❌", fmt.Sprintf("failed to read %s: %v", versionPath, err)}}
+	}
+
+	localContent := strings.TrimSpace(string(localData))
+
+	var localVersions map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(localContent), &localVersions); err != nil {
+		return []checkItem{{"Spec Version", "❌", fmt.Sprintf("failed to parse local VERSION: %v", err)}}
+	}
+
+	// Detect network
+	isAtlantic := false
+	for key := range localVersions {
+		if strings.Contains(strings.ToLower(key), "atlantic") {
+			isAtlantic = true
+			break
+		}
+	}
+
+	var remoteURL string
+	if isAtlantic {
+		remoteURL = atlanticVersionURL
+	} else {
+		remoteURL = mainnetVersionURL
+	}
+
+	resp, err := http.Get(remoteURL)
+	if err != nil {
+		return []checkItem{{"Spec Version", "❌", fmt.Sprintf("failed to fetch remote: %v", err)}}
+	}
+	defer resp.Body.Close()
+
+	remoteData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return []checkItem{{"Spec Version", "❌", fmt.Sprintf("failed to read remote: %v", err)}}
+	}
+
+	remoteContent := strings.TrimSpace(string(remoteData))
+
+	var localMap, remoteMap map[string]map[string]interface{}
+	if err := json.Unmarshal([]byte(localContent), &localMap); err != nil {
+		return []checkItem{{"Spec Version", "❌", fmt.Sprintf("parse error: %v", err)}}
+	}
+	if err := json.Unmarshal([]byte(remoteContent), &remoteMap); err != nil {
+		return []checkItem{{"Spec Version", "❌", fmt.Sprintf("remote parse error: %v", err)}}
+	}
+
+	matched := true
+	var diffs []string
+
+	for key, remoteVal := range remoteMap {
+		localVal, exists := localMap[key]
+		if !exists {
+			matched = false
+			diffs = append(diffs, fmt.Sprintf("missing: %s", key))
+			continue
+		}
+		remoteJSON, _ := json.Marshal(remoteVal)
+		localJSON, _ := json.Marshal(localVal)
+		if string(remoteJSON) != string(localJSON) {
+			matched = false
+			diffs = append(diffs, fmt.Sprintf("%s mismatch", key))
+		}
+	}
+
+	for key := range localMap {
+		if _, exists := remoteMap[key]; !exists {
+			matched = false
+			diffs = append(diffs, fmt.Sprintf("extra: %s", key))
+		}
+	}
+
+	if matched {
+		return []checkItem{{"Spec Version", "✅", "matches remote"}}
+	}
+	return []checkItem{{"Spec Version", "❌", strings.Join(diffs, "; ")}}
+}
+
+// ==================== CHECK: Binary Version ====================
+
+func checkBinaryVersion(binDir string) checkItem {
+	binaryPath := filepath.Join(binDir, "pharos_light")
+	libPath := filepath.Join(binDir, "libevmone.so")
+	cmdExec := exec.Command(binaryPath, "--version")
+	cmdExec.Env = append(os.Environ(), fmt.Sprintf("LD_PRELOAD=%s", libPath))
+
+	out, err := cmdExec.CombinedOutput()
+	if err != nil {
+		return checkItem{"Binary Version", "❌", fmt.Sprintf("failed: %v (%s)", err, strings.TrimSpace(string(out)))}
+	}
+
+	versionStr := strings.TrimSpace(string(out))
+	commitID := versionStr
+	if idx := strings.Index(versionStr, "-"); idx > 0 {
+		commitID = versionStr[:idx]
+	}
+
+	return checkItem{"Binary Version", "✅", fmt.Sprintf("%s (commit: %s)", versionStr, commitID)}
 }
 
 func init() {
@@ -401,5 +396,5 @@ func init() {
 
 	healthCheckCmd.Flags().StringVarP(&hcKeysDir, "keys-dir", "k", "./keys", "Directory containing domain.pub")
 	healthCheckCmd.Flags().StringVar(&hcBinDir, "bin-dir", "./bin", "Directory containing pharos_light and VERSION")
-	healthCheckCmd.Flags().StringVar(&hcRPCEndpoint, "rpc-endpoint", "", "RPC endpoint URL (auto-detect if empty: atlantic->atlantic-rpc.dplabs-internal.com, mainnet->rpc.pharos.xyz)")
+	healthCheckCmd.Flags().StringVar(&hcRPCEndpoint, "rpc-endpoint", "", "RPC endpoint URL (auto-detect if empty)")
 }
