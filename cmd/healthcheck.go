@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -35,6 +36,9 @@ var (
 const (
 	atlanticVersionURL = "https://raw.githubusercontent.com/PharosNetwork/resources/main/atlantic.version"
 	mainnetVersionURL  = "https://raw.githubusercontent.com/PharosNetwork/resources/main/mainnet.version"
+
+	atlanticChainID = 0xa8231 // 689713
+	mainnetChainID  = 0x688   // 1672
 )
 
 type infoItem struct {
@@ -57,7 +61,11 @@ var healthCheckCmd = &cobra.Command{
 		var checks []checkItem
 
 		// === INFO section ===
-		network := detectNetwork(hcBinDir)
+		localRPC := "http://127.0.0.1:18100"
+		network, netErr := detectNetworkByChainID(localRPC)
+		if netErr != nil {
+			network = "unknown (" + netErr.Error() + ")"
+		}
 		infos = append(infos, infoItem{"Network", network})
 		infos = append(infos, infoItem{"CPU Cores", fmt.Sprintf("%d", runtime.NumCPU())})
 		infos = append(infos, infoItem{"Memory", getMemoryInfo()})
@@ -69,11 +77,10 @@ var healthCheckCmd = &cobra.Command{
 			infos = append(infos, infoItem{"Node ID", nodeID})
 		}
 
-		// Determine RPC endpoint
-		localRPC := "http://127.0.0.1:18100"
+		// Determine remote RPC endpoint for validator check
 		remoteRPC := hcRPCEndpoint
 		if remoteRPC == "" {
-			if strings.Contains(strings.ToLower(network), "atlantic") {
+			if network == "Atlantic" {
 				remoteRPC = "https://atlantic.dplabs-internal.com"
 			} else {
 				remoteRPC = "https://rpc.pharos.xyz"
@@ -127,20 +134,27 @@ var healthCheckCmd = &cobra.Command{
 
 // ==================== INFO helpers ====================
 
-func detectNetwork(binDir string) string {
-	versionPath := filepath.Join(binDir, "VERSION")
-	data, err := os.ReadFile(versionPath)
+// detectNetworkByChainID connects to local RPC and returns network name based on chainID
+func detectNetworkByChainID(rpcURL string) (string, error) {
+	client, err := ethclient.Dial(rpcURL)
 	if err != nil {
-		return "unknown"
+		return "", fmt.Errorf("failed to connect: %w", err)
 	}
-	content := strings.ToLower(string(data))
-	if strings.Contains(content, "atlantic") {
-		return "Atlantic"
+	defer client.Close()
+
+	chainID, err := client.ChainID(context.Background())
+	if err != nil {
+		return "", fmt.Errorf("failed to get chainID: %w", err)
 	}
-	if strings.Contains(content, "mainnet") {
-		return "Mainnet"
+
+	switch chainID.Int64() {
+	case atlanticChainID:
+		return "Atlantic", nil
+	case mainnetChainID:
+		return "Mainnet", nil
+	default:
+		return fmt.Sprintf("unknown (chainID=%d)", chainID.Int64()), nil
 	}
-	return "unknown"
 }
 
 func getMemoryInfo() string {
@@ -440,7 +454,6 @@ func checkBlockProduction(rpcURL string) checkItem {
 var (
 	ntRPCEndpoint string
 	ntKeysDir     string
-	ntBinDir      string
 	ntPort        string
 	ntCount       int
 )
@@ -450,16 +463,20 @@ var networkTestCmd = &cobra.Command{
 	Short: "TCP latency test to all validator endpoints",
 	Long:  "Fetch all validator endpoints from the staking contract and measure TCP connection latency (like nping but pure Go, no extra tools needed)",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Auto-detect RPC endpoint from network if not explicitly set
+		// Auto-detect RPC endpoint from chainID if not explicitly set
 		rpcEndpoint := ntRPCEndpoint
 		if !cmd.Flags().Changed("rpc-endpoint") {
-			network := detectNetwork(ntBinDir)
-			if strings.Contains(strings.ToLower(network), "atlantic") {
+			localRPC := "http://127.0.0.1:18100"
+			network, err := detectNetworkByChainID(localRPC)
+			if err != nil {
+				return fmt.Errorf("failed to detect network: %w (use --rpc-endpoint to specify manually)", err)
+			}
+			if network == "Atlantic" {
 				rpcEndpoint = "https://atlantic.dplabs-internal.com"
 			} else {
 				rpcEndpoint = "https://rpc.pharos.xyz"
 			}
-			fmt.Printf("Auto-detected RPC: %s\n", rpcEndpoint)
+			fmt.Printf("Auto-detected network: %s, RPC: %s\n", network, rpcEndpoint)
 		}
 
 		// Get all active validators from contract
@@ -634,7 +651,6 @@ func init() {
 
 	networkTestCmd.Flags().StringVar(&ntRPCEndpoint, "rpc-endpoint", "", "RPC endpoint URL (auto-detect: atlantic->atlantic.dplabs-internal.com, mainnet->rpc.pharos.xyz)")
 	networkTestCmd.Flags().StringVarP(&ntKeysDir, "keys-dir", "k", "./keys", "Directory containing domain.pub")
-	networkTestCmd.Flags().StringVar(&ntBinDir, "bin-dir", "./bin", "Directory containing VERSION file for network detection")
 	networkTestCmd.Flags().StringVar(&ntPort, "port", "18100", "TCP port to test")
 	networkTestCmd.Flags().IntVar(&ntCount, "count", 3, "Number of TCP probes per endpoint")
 }
