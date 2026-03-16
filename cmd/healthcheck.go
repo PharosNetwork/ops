@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -577,9 +578,17 @@ var networkTestCmd = &cobra.Command{
 		fmt.Printf("Found %d validators (%d with valid endpoints, %d skipped), TCP latency test (%d probes each)...\n\n",
 			len(endpoints), len(validEndpoints), skippedCount, ntCount)
 
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-		fmt.Fprintln(w, "VALIDATOR\tENDPOINT\tMIN\tAVG\tMAX\tSTATUS")
-		fmt.Fprintln(w, "---------\t--------\t---\t---\t---\t------")
+		type testResult struct {
+			Tag    string
+			Target string
+			Min    time.Duration
+			Avg    time.Duration
+			Max    time.Duration
+			Lost   int
+			Ok     bool // has at least one successful probe
+		}
+
+		var results []testResult
 
 		for _, ep := range validEndpoints {
 			target := parseEndpoint(ep.Endpoint, ntPort)
@@ -600,7 +609,7 @@ var networkTestCmd = &cobra.Command{
 			}
 
 			if len(latencies) == 0 {
-				fmt.Fprintf(w, "%s\t%s\t-\t-\t-\t❌ unreachable\n", ep.Tag, target)
+				results = append(results, testResult{Tag: ep.Tag, Target: target, Ok: false})
 				continue
 			}
 
@@ -615,15 +624,33 @@ var networkTestCmd = &cobra.Command{
 				}
 			}
 			avgL := totalL / time.Duration(len(latencies))
+			results = append(results, testResult{Tag: ep.Tag, Target: target, Min: minL, Avg: avgL, Max: maxL, Lost: failCount, Ok: true})
+		}
 
-			status := "✅"
-			if failCount > 0 {
-				status = fmt.Sprintf("⚠️ %d/%d lost", failCount, ntCount)
+		// Sort by AVG latency (unreachable at the end)
+		sort.Slice(results, func(i, j int) bool {
+			if results[i].Ok != results[j].Ok {
+				return results[i].Ok // reachable before unreachable
 			}
+			return results[i].Avg < results[j].Avg
+		})
 
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+		fmt.Fprintln(w, "VALIDATOR\tENDPOINT\tMIN\tAVG\tMAX\tSTATUS")
+		fmt.Fprintln(w, "---------\t--------\t---\t---\t---\t------")
+
+		for _, r := range results {
+			if !r.Ok {
+				fmt.Fprintf(w, "%s\t%s\t-\t-\t-\t❌ unreachable\n", r.Tag, r.Target)
+				continue
+			}
+			status := "✅"
+			if r.Lost > 0 {
+				status = fmt.Sprintf("⚠️ %d/%d lost", r.Lost, ntCount)
+			}
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
-				ep.Tag, target,
-				formatDuration(minL), formatDuration(avgL), formatDuration(maxL),
+				r.Tag, r.Target,
+				formatDuration(r.Min), formatDuration(r.Avg), formatDuration(r.Max),
 				status)
 		}
 		w.Flush()
