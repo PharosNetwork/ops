@@ -1,11 +1,13 @@
 package cmd
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -15,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
@@ -48,23 +51,17 @@ type checkItem struct {
 var healthCheckCmd = &cobra.Command{
 	Use:   "health-check",
 	Short: "Run node health checks",
-	Long:  "Perform a series of self-checks on the node: system info, ulimit, spec version, binary version, node ID, validator status",
+	Long:  "Perform a series of self-checks on the node: system info, ulimit, spec version, binary version, node ID, validator status, block production",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		var infos []infoItem
 		var checks []checkItem
 
 		// === INFO section ===
-		// Network (detect from VERSION file)
 		network := detectNetwork(hcBinDir)
 		infos = append(infos, infoItem{"Network", network})
-
-		// CPU
 		infos = append(infos, infoItem{"CPU Cores", fmt.Sprintf("%d", runtime.NumCPU())})
-
-		// Memory
 		infos = append(infos, infoItem{"Memory", getMemoryInfo()})
 
-		// Node ID
 		nodeID, nodeIDErr := getNodeIDFromKeys(hcKeysDir)
 		if nodeIDErr != nil {
 			infos = append(infos, infoItem{"Node ID", fmt.Sprintf("error: %v", nodeIDErr)})
@@ -72,27 +69,24 @@ var healthCheckCmd = &cobra.Command{
 			infos = append(infos, infoItem{"Node ID", nodeID})
 		}
 
-		// Validator status
-		rpcEndpoint := hcRPCEndpoint
-		if rpcEndpoint == "" {
+		// Determine RPC endpoint
+		localRPC := "http://127.0.0.1:18100"
+		remoteRPC := hcRPCEndpoint
+		if remoteRPC == "" {
 			if strings.Contains(strings.ToLower(network), "atlantic") {
-				rpcEndpoint = "https://atlantic.dplabs-internal.com"
+				remoteRPC = "https://atlantic.dplabs-internal.com"
 			} else {
-				rpcEndpoint = "https://rpc.pharos.xyz"
+				remoteRPC = "https://rpc.pharos.xyz"
 			}
 		}
-		validatorStr := getValidatorStatus(cmd, hcKeysDir, rpcEndpoint)
+		validatorStr := getValidatorStatus(cmd, hcKeysDir, remoteRPC)
 		infos = append(infos, infoItem{"Validator", validatorStr})
 
 		// === CHECK section ===
-		// Ulimit
 		checks = append(checks, checkUlimit()...)
-
-		// Spec Version
 		checks = append(checks, checkSpecVersion(hcBinDir)...)
-
-		// Binary Version
 		checks = append(checks, checkBinaryVersion(hcBinDir))
+		checks = append(checks, checkBlockProduction(localRPC))
 
 		// Print INFO table
 		fmt.Println()
@@ -115,7 +109,6 @@ var healthCheckCmd = &cobra.Command{
 		wc.Flush()
 		fmt.Println()
 
-		// Summary
 		failCount := 0
 		for _, c := range checks {
 			if c.Status == "❌" {
@@ -163,7 +156,6 @@ func getMemoryInfo() string {
 			}
 		}
 	}
-	// macOS fallback
 	out, err := exec.Command("sysctl", "-n", "hw.memsize").Output()
 	if err == nil {
 		bytesVal, _ := strconv.ParseUint(strings.TrimSpace(string(out)), 10, 64)
@@ -206,13 +198,13 @@ func getValidatorStatus(cmd *cobra.Command, keysDir string, rpcEndpoint string) 
 
 	poolIDHex, err := computePoolID(pubKeyPath)
 	if err != nil {
-		return fmt.Sprintf("❌ (error: %v)", err)
+		return fmt.Sprintf("error: %v", err)
 	}
 
 	poolIDHex = strings.TrimPrefix(poolIDHex, "0x")
 	poolIDBytes, err := hex.DecodeString(poolIDHex)
 	if err != nil {
-		return fmt.Sprintf("❌ (invalid pool ID: %v)", err)
+		return fmt.Sprintf("error: invalid pool ID: %v", err)
 	}
 
 	var poolIDBytes32 [32]byte
@@ -220,19 +212,19 @@ func getValidatorStatus(cmd *cobra.Command, keysDir string, rpcEndpoint string) 
 
 	client, err := ethclient.Dial(rpcEndpoint)
 	if err != nil {
-		return fmt.Sprintf("❌ (RPC error: %v)", err)
+		return fmt.Sprintf("error: RPC %v", err)
 	}
 	defer client.Close()
 
 	parsedABI, err := abi.JSON(strings.NewReader(stakingABI))
 	if err != nil {
-		return fmt.Sprintf("❌ (ABI error: %v)", err)
+		return fmt.Sprintf("error: ABI %v", err)
 	}
 
 	contractAddr := common.HexToAddress(stakingAddress)
 	data, err := parsedABI.Pack("getValidator", poolIDBytes32)
 	if err != nil {
-		return fmt.Sprintf("❌ (pack error: %v)", err)
+		return fmt.Sprintf("error: pack %v", err)
 	}
 
 	result, err := client.CallContract(cmd.Context(), ethereum.CallMsg{
@@ -240,33 +232,33 @@ func getValidatorStatus(cmd *cobra.Command, keysDir string, rpcEndpoint string) 
 		Data: data,
 	}, nil)
 	if err != nil {
-		return fmt.Sprintf("❌ (call error: %v)", err)
+		return fmt.Sprintf("error: call %v", err)
 	}
 
 	results, err := parsedABI.Unpack("getValidator", result)
 	if err != nil {
-		return fmt.Sprintf("❌ (unpack error: %v)", err)
+		return fmt.Sprintf("error: unpack %v", err)
 	}
 
 	if len(results) == 0 {
-		return "❌ (no result)"
+		return "no result"
 	}
 
 	v := reflect.ValueOf(results[0])
 	if v.Kind() != reflect.Struct {
-		return "❌ (unexpected type)"
+		return "unexpected type"
 	}
 
 	statusField := v.FieldByName("Status")
 	if !statusField.IsValid() {
-		return "❌ (status field not found)"
+		return "status field not found"
 	}
 
 	status := uint8(statusField.Uint())
 	if status > 0 {
 		return fmt.Sprintf("✅ (status=%d)", status)
 	}
-	return "❌ (not registered)"
+	return "not registered"
 }
 
 // ==================== CHECK: ulimit ====================
@@ -279,10 +271,10 @@ func checkUlimit() []checkItem {
 	ulimitStr := strings.TrimSpace(string(out))
 	ulimitVal, _ := strconv.ParseUint(ulimitStr, 10, 64)
 
-	if ulimitVal >= 655350 {
+	if ulimitVal >= 10000000 {
 		return []checkItem{{"Ulimit (open files)", "✅", ulimitStr}}
 	}
-	return []checkItem{{"Ulimit (open files)", "❌", fmt.Sprintf("%s (required >= 655350)", ulimitStr)}}
+	return []checkItem{{"Ulimit (open files)", "❌", fmt.Sprintf("%s (required >= 10000000)", ulimitStr)}}
 }
 
 // ==================== CHECK: Spec Version ====================
@@ -301,7 +293,6 @@ func checkSpecVersion(binDir string) []checkItem {
 		return []checkItem{{"Spec Version", "❌", fmt.Sprintf("failed to parse local VERSION: %v", err)}}
 	}
 
-	// Detect network
 	isAtlantic := false
 	for key := range localVersions {
 		if strings.Contains(strings.ToLower(key), "atlantic") {
@@ -330,7 +321,7 @@ func checkSpecVersion(binDir string) []checkItem {
 
 	remoteContent := strings.TrimSpace(string(remoteData))
 
-	var localMap, remoteMap map[string]map[string]interface{}
+	var localMap, remoteMap map[string]map[string]any
 	if err := json.Unmarshal([]byte(localContent), &localMap); err != nil {
 		return []checkItem{{"Spec Version", "❌", fmt.Sprintf("parse error: %v", err)}}
 	}
@@ -391,10 +382,245 @@ func checkBinaryVersion(binDir string) checkItem {
 	return checkItem{"Binary Version", "✅", fmt.Sprintf("%s (commit: %s)", versionStr, commitID)}
 }
 
+// ==================== CHECK: Block Production ====================
+
+// getBlockNumber calls eth_blockNumber via JSON-RPC and returns the block number
+func getBlockNumber(rpcURL string) (uint64, error) {
+	payload := []byte(`{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}`)
+	resp, err := http.Post(rpcURL, "application/json", bytes.NewReader(payload))
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Result string `json:"result"`
+		Error  *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return 0, err
+	}
+	if result.Error != nil {
+		return 0, fmt.Errorf("rpc error: %s", result.Error.Message)
+	}
+
+	// Parse hex block number (e.g. "0x1a2b3c")
+	hexStr := strings.TrimPrefix(result.Result, "0x")
+	blockNum, err := strconv.ParseUint(hexStr, 16, 64)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse block number %q: %v", result.Result, err)
+	}
+	return blockNum, nil
+}
+
+func checkBlockProduction(rpcURL string) checkItem {
+	block1, err := getBlockNumber(rpcURL)
+	if err != nil {
+		return checkItem{"Block Production", "❌", fmt.Sprintf("failed to get block number: %v", err)}
+	}
+
+	// Wait 3 seconds and check again
+	time.Sleep(3 * time.Second)
+
+	block2, err := getBlockNumber(rpcURL)
+	if err != nil {
+		return checkItem{"Block Production", "❌", fmt.Sprintf("failed to get block number (2nd): %v", err)}
+	}
+
+	if block2 > block1 {
+		return checkItem{"Block Production", "✅", fmt.Sprintf("block %d → %d (+%d in 3s)", block1, block2, block2-block1)}
+	}
+	return checkItem{"Block Production", "❌", fmt.Sprintf("block stuck at %d (no increase in 3s)", block1)}
+}
+
+// ==================== network-test command ====================
+
+var (
+	ntRPCEndpoint string
+	ntKeysDir     string
+	ntPort        string
+	ntCount       int
+)
+
+var networkTestCmd = &cobra.Command{
+	Use:   "network-test",
+	Short: "TCP latency test to all validator endpoints",
+	Long:  "Fetch all validator endpoints from the staking contract and measure TCP connection latency (like nping but pure Go, no extra tools needed)",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		// Get all active validators from contract
+		client, err := ethclient.Dial(ntRPCEndpoint)
+		if err != nil {
+			return fmt.Errorf("failed to connect to RPC: %w", err)
+		}
+		defer client.Close()
+
+		parsedABI, err := abi.JSON(strings.NewReader(stakingABI))
+		if err != nil {
+			return fmt.Errorf("failed to parse ABI: %w", err)
+		}
+
+		contractAddr := common.HexToAddress(stakingAddress)
+
+		// We need to get the list of active validators
+		// Try calling getActiveValidators if available, otherwise use epoch info
+		// For now, we'll read from a validators file or use admin_peers
+		// Actually, let's try admin_peers first via RPC
+		fmt.Println("🌐 Fetching validator endpoints...")
+		fmt.Println()
+
+		type validatorEndpoint struct {
+			Tag      string
+			Endpoint string
+			PoolID   string
+		}
+
+		var endpoints []validatorEndpoint
+
+		// Try to get active validators from getActiveValidators
+		activeData, err := parsedABI.Pack("getActiveValidators")
+		if err == nil {
+			activeResult, err := client.CallContract(cmd.Context(), ethereum.CallMsg{
+				To:   &contractAddr,
+				Data: activeData,
+			}, nil)
+			if err == nil && len(activeResult) > 0 {
+				activeResults, err := parsedABI.Unpack("getActiveValidators", activeResult)
+				if err == nil && len(activeResults) > 0 {
+					// activeResults[0] should be []bytes32
+					poolIDs, ok := activeResults[0].([][32]byte)
+					if ok {
+						for _, pid := range poolIDs {
+							// Get validator info for each pool ID
+							vData, err := parsedABI.Pack("getValidator", pid)
+							if err != nil {
+								continue
+							}
+							vResult, err := client.CallContract(cmd.Context(), ethereum.CallMsg{
+								To:   &contractAddr,
+								Data: vData,
+							}, nil)
+							if err != nil {
+								continue
+							}
+							vResults, err := parsedABI.Unpack("getValidator", vResult)
+							if err != nil || len(vResults) == 0 {
+								continue
+							}
+							v := reflect.ValueOf(vResults[0])
+							if v.Kind() != reflect.Struct {
+								continue
+							}
+							ep := v.FieldByName("Endpoint").String()
+							desc := v.FieldByName("Description").String()
+							if ep != "" {
+								endpoints = append(endpoints, validatorEndpoint{
+									Tag:      desc,
+									Endpoint: ep,
+									PoolID:   "0x" + hex.EncodeToString(pid[:]),
+								})
+							}
+						}
+					}
+				}
+			}
+		}
+
+		if len(endpoints) == 0 {
+			return fmt.Errorf("no validator endpoints found. Make sure the staking contract has getActiveValidators method or validators have endpoints set")
+		}
+
+		// TCP latency test
+		fmt.Printf("Found %d validators, starting TCP latency test (port %s, %d probes each)...\n\n", len(endpoints), ntPort, ntCount)
+
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+		fmt.Fprintln(w, "VALIDATOR\tENDPOINT\tMIN\tAVG\tMAX\tSTATUS")
+		fmt.Fprintln(w, "---------\t--------\t---\t---\t---\t------")
+
+		for _, ep := range endpoints {
+			host := ep.Endpoint
+			// Strip protocol prefix if present
+			host = strings.TrimPrefix(host, "http://")
+			host = strings.TrimPrefix(host, "https://")
+			// Strip path
+			if idx := strings.Index(host, "/"); idx > 0 {
+				host = host[:idx]
+			}
+			// Strip existing port if any
+			if h, _, err := net.SplitHostPort(host); err == nil {
+				host = h
+			}
+
+			target := net.JoinHostPort(host, ntPort)
+
+			var latencies []time.Duration
+			var failCount int
+
+			for i := 0; i < ntCount; i++ {
+				start := time.Now()
+				conn, err := net.DialTimeout("tcp", target, 5*time.Second)
+				elapsed := time.Since(start)
+				if err != nil {
+					failCount++
+					continue
+				}
+				conn.Close()
+				latencies = append(latencies, elapsed)
+			}
+
+			if len(latencies) == 0 {
+				fmt.Fprintf(w, "%s\t%s\t-\t-\t-\t❌ unreachable\n", ep.Tag, target)
+				continue
+			}
+
+			minL, maxL, totalL := latencies[0], latencies[0], time.Duration(0)
+			for _, l := range latencies {
+				totalL += l
+				if l < minL {
+					minL = l
+				}
+				if l > maxL {
+					maxL = l
+				}
+			}
+			avgL := totalL / time.Duration(len(latencies))
+
+			status := "✅"
+			if failCount > 0 {
+				status = fmt.Sprintf("⚠️ %d/%d lost", failCount, ntCount)
+			}
+
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+				ep.Tag, target,
+				formatDuration(minL), formatDuration(avgL), formatDuration(maxL),
+				status)
+		}
+		w.Flush()
+		fmt.Println()
+
+		return nil
+	},
+}
+
+func formatDuration(d time.Duration) string {
+	ms := float64(d.Microseconds()) / 1000.0
+	if ms < 1 {
+		return fmt.Sprintf("%.0fµs", float64(d.Microseconds()))
+	}
+	return fmt.Sprintf("%.1fms", ms)
+}
+
 func init() {
 	rootCmd.AddCommand(healthCheckCmd)
+	rootCmd.AddCommand(networkTestCmd)
 
 	healthCheckCmd.Flags().StringVarP(&hcKeysDir, "keys-dir", "k", "./keys", "Directory containing domain.pub")
 	healthCheckCmd.Flags().StringVar(&hcBinDir, "bin-dir", "./bin", "Directory containing pharos_light and VERSION")
 	healthCheckCmd.Flags().StringVar(&hcRPCEndpoint, "rpc-endpoint", "", "RPC endpoint URL (auto-detect if empty)")
+
+	networkTestCmd.Flags().StringVar(&ntRPCEndpoint, "rpc-endpoint", "http://127.0.0.1:18100", "RPC endpoint URL to fetch validators")
+	networkTestCmd.Flags().StringVarP(&ntKeysDir, "keys-dir", "k", "./keys", "Directory containing domain.pub")
+	networkTestCmd.Flags().StringVar(&ntPort, "port", "18100", "TCP port to test")
+	networkTestCmd.Flags().IntVar(&ntCount, "count", 3, "Number of TCP probes per endpoint")
 }
