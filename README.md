@@ -374,6 +374,81 @@ Commission Rate:      1000 basis points (10.00%)
 Delegation Enabled:   true
 ```
 
+## Diagnostics & Monitoring
+
+### Health Check
+
+Run a comprehensive self-check on your node. The output is split into two sections:
+
+- **NODE INFO** — Informational items (network, CPU, memory, Node ID, validator status)
+- **HEALTH CHECK** — Critical checks with ✅/❌ (ulimit, spec version, binary version, block production)
+
+Network detection is based on chainID from local RPC (`0xa8231` = Atlantic, `0x688` = Mainnet).
+
+```bash
+./ops health-check
+```
+
+**Optional Parameters:**
+- `--keys-dir` - Directory containing domain.pub (default: `./keys`)
+- `--bin-dir` - Directory containing pharos_light and VERSION (default: `./bin`)
+- `--rpc-endpoint` - Remote RPC endpoint for validator check (auto-detect if empty)
+
+**Example Output:**
+```
+📋 NODE INFO
+────────────────────────────────────────────────────────────
+  Network      Atlantic
+  CPU Cores    8
+  Memory       31.2 GB
+  Node ID      0x382897b3c8e759c1...
+  Validator    ✅ (status=1)
+
+🔍 HEALTH CHECK
+────────────────────────────────────────────────────────────
+  ✅ Ulimit (open files)   10000000
+  ✅ Spec Version          matches remote
+  ✅ Binary Version        72eeb262f-dirty (commit: 72eeb262f)
+  ✅ Block Production      block 16287834 → 16287837 (+3 in 3s)
+
+✅ All checks passed.
+```
+
+**Check Details:**
+- **Ulimit**: Must be ≥ 10,000,000 open files
+- **Spec Version**: Compares local `./bin/VERSION` against remote GitHub version file
+- **Binary Version**: Runs `pharos_light --version` to get commit ID
+- **Block Production**: Calls `eth_blockNumber` twice (3s apart) to verify blocks are increasing
+
+### Network Test
+
+TCP latency test to all active validator endpoints. Fetches validator list from the staking contract via `getActiveValidators`, then measures TCP connection latency to each endpoint (pure Go, no external tools needed).
+
+Results are sorted by AVG latency (ascending), with unreachable endpoints at the bottom. Validators without valid endpoints (no IP/hostname) are skipped.
+
+```bash
+./ops network-test
+```
+
+**Optional Parameters:**
+- `--rpc-endpoint` - RPC endpoint to fetch validators (auto-detect: Atlantic → `atlantic.dplabs-internal.com`, Mainnet → `rpc.pharos.xyz`)
+- `--port` - Default TCP port if endpoint has none (default: `18100`)
+- `--count` - Number of TCP probes per endpoint (default: `3`)
+
+**Example Output:**
+```
+Auto-detected network: Atlantic, RPC: https://atlantic.dplabs-internal.com
+🌐 Fetching validator endpoints...
+
+Found 31 validators (5 with valid endpoints, 26 skipped), TCP latency test (3 probes each)...
+
+VALIDATOR      ENDPOINT                              AVG       MIN       MAX       STATUS
+---------      --------                              ---       ---       ---       ------
+Hashkey Cloud  15.235.230.104:19000                  2.6ms     2.5ms     2.7ms     ✅
+LECCA          57.129.96.15:18100                    246.6ms   244.3ms   251.2ms   ✅
+HighTower01    bubba.pharos.test.at.htw.tech:18100   496.3ms   494.2ms   497.5ms   ✅
+```
+
 ## Complete Deployment Flow
 
 ### New Node Deployment
@@ -412,6 +487,12 @@ PUBLIC_IP=$(curl -s ifconfig.me)
 
 # 8. Verify validator info
 ./ops get-validator-info
+
+# 9. Run health check
+./ops health-check
+
+# 10. Test network connectivity to other validators
+./ops network-test
 ```
 
 ## Command Reference
@@ -452,6 +533,13 @@ PUBLIC_IP=$(curl -s ifconfig.me)
 | `set-delegation` | Enable or disable delegation for your validator |
 | `set-commission-rate` | Set commission rate (0-10000 basis points) |
 | `get-validator-info` | Query validator information, staking details, and settings |
+
+### Diagnostics & Monitoring
+
+| Command | Description |
+|---------|-------------|
+| `health-check` | Run node self-checks (system info, ulimit, spec version, binary version, block production, validator status) |
+| `network-test` | TCP latency test to all active validator endpoints |
 
 ## Configuration Files
 
