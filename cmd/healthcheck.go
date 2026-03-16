@@ -440,6 +440,7 @@ func checkBlockProduction(rpcURL string) checkItem {
 var (
 	ntRPCEndpoint string
 	ntKeysDir     string
+	ntBinDir      string
 	ntPort        string
 	ntCount       int
 )
@@ -449,8 +450,20 @@ var networkTestCmd = &cobra.Command{
 	Short: "TCP latency test to all validator endpoints",
 	Long:  "Fetch all validator endpoints from the staking contract and measure TCP connection latency (like nping but pure Go, no extra tools needed)",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Auto-detect RPC endpoint from network if not explicitly set
+		rpcEndpoint := ntRPCEndpoint
+		if !cmd.Flags().Changed("rpc-endpoint") {
+			network := detectNetwork(ntBinDir)
+			if strings.Contains(strings.ToLower(network), "atlantic") {
+				rpcEndpoint = "https://atlantic.dplabs-internal.com"
+			} else {
+				rpcEndpoint = "https://rpc.pharos.xyz"
+			}
+			fmt.Printf("Auto-detected RPC: %s\n", rpcEndpoint)
+		}
+
 		// Get all active validators from contract
-		client, err := ethclient.Dial(ntRPCEndpoint)
+		client, err := ethclient.Dial(rpcEndpoint)
 		if err != nil {
 			return fmt.Errorf("failed to connect to RPC: %w", err)
 		}
@@ -619,8 +632,9 @@ func init() {
 	healthCheckCmd.Flags().StringVar(&hcBinDir, "bin-dir", "./bin", "Directory containing pharos_light and VERSION")
 	healthCheckCmd.Flags().StringVar(&hcRPCEndpoint, "rpc-endpoint", "", "RPC endpoint URL (auto-detect if empty)")
 
-	networkTestCmd.Flags().StringVar(&ntRPCEndpoint, "rpc-endpoint", "http://127.0.0.1:18100", "RPC endpoint URL to fetch validators")
+	networkTestCmd.Flags().StringVar(&ntRPCEndpoint, "rpc-endpoint", "", "RPC endpoint URL (auto-detect: atlantic->atlantic.dplabs-internal.com, mainnet->rpc.pharos.xyz)")
 	networkTestCmd.Flags().StringVarP(&ntKeysDir, "keys-dir", "k", "./keys", "Directory containing domain.pub")
+	networkTestCmd.Flags().StringVar(&ntBinDir, "bin-dir", "./bin", "Directory containing VERSION file for network detection")
 	networkTestCmd.Flags().StringVar(&ntPort, "port", "18100", "TCP port to test")
 	networkTestCmd.Flags().IntVar(&ntCount, "count", 3, "Number of TCP probes per endpoint")
 }
