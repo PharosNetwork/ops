@@ -170,7 +170,7 @@ export VALIDATOR_PRIVATE_KEY=YOUR_PRIVATE_KEY_HERE
 
 ./ops add-validator \
   --domain-label my-validator \
-  --domain-endpoint tcp://47.84.7.245:19000 \
+  --domain-endpoint tcp://YOUR_PUBLIC_IP:19000 \
   --stake 1000000
 ```
 
@@ -180,7 +180,7 @@ export VALIDATOR_PRIVATE_KEY=YOUR_PRIVATE_KEY_HERE
 **Required Parameters:**
 - `--domain-label` - Validator name/description
 - `--domain-endpoint` - Your validator's **public** endpoint URL (must be accessible from other nodes)
-  - For IP:PORT format: must use `tcp://` prefix with your **public IP** (e.g., `tcp://47.84.7.245:19000`)
+  - For IP:PORT format: must use `tcp://` prefix with your **public IP** (e.g., `tcp://YOUR_PUBLIC_IP:19000`)
   - For domain names: can use any protocol (e.g., `https://pharos.validator.com`)
   - ⚠️ **Do NOT use `127.0.0.1` or `localhost`** - other nodes cannot connect to your validator
 
@@ -207,10 +207,10 @@ PUBLIC_IP=$(curl -s ifconfig.me)
 **Output:**
 ```
 Adding validator...
-Account address: 0x1234567890abcdef...
+Account address: 0xYourAddress...
 Connected to endpoint
 Stake amount: 10000000 tokens (10000000000000000000000000 wei)
-Validator register tx: 0xabcdef1234567890...
+Validator register tx: 0xTransactionHash...
 Validator register success
 ```
 
@@ -243,10 +243,10 @@ export VALIDATOR_PRIVATE_KEY=abcdef1234567890abcdef1234567890abcdef1234567890abc
 **Output:**
 ```
 Exiting validator...
-Account address: 0x1234567890abcdef...
-Pool ID: abc123def456789...
+Account address: 0xYourAddress...
+Pool ID: YourPoolId...
 Connected to endpoint
-Validator exit tx: 0xfedcba0987654321...
+Validator exit tx: 0xTransactionHash...
 Validator exit success
 ```
 
@@ -348,20 +348,20 @@ Query comprehensive validator information including staking details, commission 
 
 # Query using specific pool ID
 ./ops get-validator-info \
-  --pool-id 46a7519c6664387c8cc603a2e406e3f46d32c3326af5343302bb3178526ecc3b \
+  --pool-id YOUR_POOL_ID_HEX \
   --rpc-endpoint http://127.0.0.1:18100
 ```
 
 **Output:**
 ```
 === Validator Information ===
-Pool ID:              46a7519c6664387c8cc603a2e406e3f46d32c3326af5343302bb3178526ecc3b
+Pool ID:              <your_pool_id_hex>
 Description:          my-validator
-Owner:                0x1234567890abcdef1234567890abcdef12345678
-Endpoint:             tcp://47.84.7.245:19000
+Owner:                0xYourOwnerAddress
+Endpoint:             tcp://YOUR_PUBLIC_IP:19000
 Status:               1
-Public Key:           0x1003abc123...
-BLS Public Key:       0x4003def456...
+Public Key:           0x1003...
+BLS Public Key:       0x4003...
 
 === Staking Information ===
 Total Stake:          1000000000000000000000000 wei
@@ -401,15 +401,15 @@ Network detection is based on chainID from local RPC (`0xa8231` = Atlantic, `0x6
   Network      Atlantic
   CPU Cores    8
   Memory       31.2 GB
-  Node ID      0x382897b3c8e759c1...
+  Node ID      0xYourNodeId...
   Validator    ✅ (status=1)
 
 🔍 HEALTH CHECK
 ────────────────────────────────────────────────────────────
   ✅ Ulimit (open files)   10000000
   ✅ Spec Version          matches remote
-  ✅ Binary Version        72eeb262f-dirty (commit: 72eeb262f)
-  ✅ Block Production      block 16287834 → 16287837 (+3 in 3s)
+  ✅ Binary Version        a1b2c3d4e-dirty (commit: a1b2c3d4e)
+  ✅ Block Production      block 1000000 → 1000003 (+3 in 3s)
 
 ✅ All checks passed.
 ```
@@ -431,22 +431,22 @@ Results are sorted by AVG latency (ascending), with unreachable endpoints at the
 ```
 
 **Optional Parameters:**
-- `--rpc-endpoint` - RPC endpoint to fetch validators (auto-detect: Atlantic → `atlantic.dplabs-internal.com`, Mainnet → `rpc.pharos.xyz`)
+- `--rpc-endpoint` - RPC endpoint to fetch validators (auto-detect based on chainID)
 - `--port` - Default TCP port if endpoint has none (default: `18100`)
 - `--count` - Number of TCP probes per endpoint (default: `3`)
 
 **Example Output:**
 ```
-Auto-detected network: Atlantic, RPC: https://atlantic.dplabs-internal.com
+Auto-detected network: Atlantic
 🌐 Fetching validator endpoints...
 
 Found 31 validators (5 with valid endpoints, 26 skipped), TCP latency test (3 probes each)...
 
-VALIDATOR      ENDPOINT                              AVG       MIN       MAX       STATUS
----------      --------                              ---       ---       ---       ------
-Hashkey Cloud  15.235.230.104:19000                  2.6ms     2.5ms     2.7ms     ✅
-LECCA          57.129.96.15:18100                    246.6ms   244.3ms   251.2ms   ✅
-HighTower01    bubba.pharos.test.at.htw.tech:18100   496.3ms   494.2ms   497.5ms   ✅
+VALIDATOR       ENDPOINT                        AVG       MIN       MAX       STATUS
+---------       --------                        ---       ---       ---       ------
+Validator-A     10.0.0.1:19000                  2.6ms     2.5ms     2.7ms     ✅
+Validator-B     10.0.0.2:18100                  246.6ms   244.3ms   251.2ms   ✅
+Validator-C     node.example.com:18100          496.3ms   494.2ms   497.5ms   ✅
 ```
 
 ## Complete Deployment Flow
@@ -605,9 +605,9 @@ PUBLIC_IP=$(curl -s ifconfig.me)
 **Solution:** Ensure `--domain-endpoint` uses your **public IP address**, not `127.0.0.1` or `localhost`:
 
 **Correct examples (using public IP):**
-- ✅ `tcp://47.84.7.245:19000`
-- ✅ `tcp://203.0.113.50:19000`
-- ✅ `https://pharos.validator.com`
+- ✅ `tcp://YOUR_PUBLIC_IP:19000`
+- ✅ `tcp://203.0.113.50:19000` (example IP from RFC 5737)
+- ✅ `https://pharos.your-domain.com`
 
 **Wrong examples (using localhost):**
 - ❌ `tcp://127.0.0.1:19000` - Other nodes cannot connect!
