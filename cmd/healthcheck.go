@@ -636,7 +636,7 @@ var networkTestCmd = &cobra.Command{
 		})
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-		fmt.Fprintln(w, "VALIDATOR\tENDPOINT\tMIN\tAVG\tMAX\tSTATUS")
+		fmt.Fprintln(w, "VALIDATOR\tENDPOINT\tAVG\tMIN\tMAX\tSTATUS")
 		fmt.Fprintln(w, "---------\t--------\t---\t---\t---\t------")
 
 		for _, r := range results {
@@ -650,7 +650,7 @@ var networkTestCmd = &cobra.Command{
 			}
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
 				r.Tag, r.Target,
-				formatDuration(r.Min), formatDuration(r.Avg), formatDuration(r.Max),
+				formatDuration(r.Avg), formatDuration(r.Min), formatDuration(r.Max),
 				status)
 		}
 		w.Flush()
