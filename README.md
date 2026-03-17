@@ -214,6 +214,54 @@ Validator register tx: 0xTransactionHash...
 Validator register success
 ```
 
+### Update Validator
+
+Update your validator's description and endpoint:
+
+```bash
+# Set private key via environment variable (required)
+export VALIDATOR_PRIVATE_KEY=YOUR_PRIVATE_KEY_HERE
+
+./ops update-validator \
+  --description "new-validator-name" \
+  --endpoint "tcp://NEW_PUBLIC_IP:19000"
+```
+
+**Environment Variable (Required):**
+- `VALIDATOR_PRIVATE_KEY` - Private key for transaction signing (hex format, with or without 0x prefix)
+
+**Required Parameters:**
+- `--description` - New validator description/label
+- `--endpoint` - New validator endpoint URL
+
+**Optional Parameters:**
+- `--rpc-endpoint` - RPC endpoint to send transaction (default: `http://127.0.0.1:18100`)
+- `--pool-id` - Pool ID (hex, 64 characters). If provided, `--domain-pubkey` is ignored
+- `--domain-pubkey` - Path to domain public key (default: `./keys/domain.pub`, used only when `--pool-id` is empty)
+
+**Example:**
+```bash
+export VALIDATOR_PRIVATE_KEY=abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890
+
+# Get your new public IP
+NEW_PUBLIC_IP=$(curl -s ifconfig.me)
+
+./ops update-validator \
+  --rpc-endpoint http://127.0.0.1:18100 \
+  --description "my-updated-validator" \
+  --endpoint tcp://$NEW_PUBLIC_IP:19000
+```
+
+**Output:**
+```
+Updating validator...
+Account address: 0xYourAddress...
+Pool ID: YourPoolId...
+Connected to endpoint
+Validator update tx: 0xTransactionHash...
+Validator update success
+```
+
 ### Exit Validator
 
 Request to exit from the validator set:
@@ -524,6 +572,7 @@ PUBLIC_IP=$(curl -s ifconfig.me)
 | Command | Description |
 |---------|-------------|
 | `add-validator` | Register as validator |
+| `update-validator` | Update validator description and endpoint |
 | `exit-validator` | Exit from validator set |
 
 ### Staking Operations
