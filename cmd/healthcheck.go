@@ -457,6 +457,7 @@ var (
 	ntKeysDir     string
 	ntPort        string
 	ntCount       int
+	ntJSON        bool
 )
 
 var networkTestCmd = &cobra.Command{
@@ -635,26 +636,58 @@ var networkTestCmd = &cobra.Command{
 			return results[i].Avg < results[j].Avg
 		})
 
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-		fmt.Fprintln(w, "VALIDATOR\tENDPOINT\tAVG\tMIN\tMAX\tSTATUS")
-		fmt.Fprintln(w, "---------\t--------\t---\t---\t---\t------")
+		// Output
+		if ntJSON {
+			type jsonResult struct {
+				Validator string  `json:"validator"`
+				Endpoint  string  `json:"endpoint"`
+				AvgMs     float64 `json:"avg_ms"`
+				MinMs     float64 `json:"min_ms"`
+				MaxMs     float64 `json:"max_ms"`
+				Lost      int     `json:"lost"`
+				Probes    int     `json:"probes"`
+				Reachable bool    `json:"reachable"`
+			}
+			var jsonResults []jsonResult
+			for _, r := range results {
+				jr := jsonResult{
+					Validator: r.Tag,
+					Endpoint:  r.Target,
+					Probes:    ntCount,
+					Reachable: r.Ok,
+					Lost:      r.Lost,
+				}
+				if r.Ok {
+					jr.AvgMs = float64(r.Avg.Microseconds()) / 1000.0
+					jr.MinMs = float64(r.Min.Microseconds()) / 1000.0
+					jr.MaxMs = float64(r.Max.Microseconds()) / 1000.0
+				}
+				jsonResults = append(jsonResults, jr)
+			}
+			out, _ := json.MarshalIndent(jsonResults, "", "  ")
+			fmt.Println(string(out))
+		} else {
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+			fmt.Fprintln(w, "VALIDATOR\tENDPOINT\tAVG\tMIN\tMAX\tSTATUS")
+			fmt.Fprintln(w, "---------\t--------\t---\t---\t---\t------")
 
-		for _, r := range results {
-			if !r.Ok {
-				fmt.Fprintf(w, "%s\t%s\t-\t-\t-\t❌ unreachable\n", r.Tag, r.Target)
-				continue
+			for _, r := range results {
+				if !r.Ok {
+					fmt.Fprintf(w, "%s\t%s\t-\t-\t-\t❌ unreachable\n", r.Tag, r.Target)
+					continue
+				}
+				status := "✅"
+				if r.Lost > 0 {
+					status = fmt.Sprintf("⚠️ %d/%d lost", r.Lost, ntCount)
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+					r.Tag, r.Target,
+					formatDuration(r.Avg), formatDuration(r.Min), formatDuration(r.Max),
+					status)
 			}
-			status := "✅"
-			if r.Lost > 0 {
-				status = fmt.Sprintf("⚠️ %d/%d lost", r.Lost, ntCount)
-			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
-				r.Tag, r.Target,
-				formatDuration(r.Avg), formatDuration(r.Min), formatDuration(r.Max),
-				status)
+			w.Flush()
+			fmt.Println()
 		}
-		w.Flush()
-		fmt.Println()
 
 		return nil
 	},
@@ -712,4 +745,5 @@ func init() {
 	networkTestCmd.Flags().StringVarP(&ntKeysDir, "keys-dir", "k", "./keys", "Directory containing domain.pub")
 	networkTestCmd.Flags().StringVar(&ntPort, "port", "18100", "TCP port to test")
 	networkTestCmd.Flags().IntVar(&ntCount, "count", 3, "Number of TCP probes per endpoint")
+	networkTestCmd.Flags().BoolVar(&ntJSON, "json", false, "Output results in JSON format")
 }
