@@ -37,6 +37,7 @@ var (
 const (
 	atlanticVersionURL = "https://raw.githubusercontent.com/PharosNetwork/resources/main/atlantic.version"
 	mainnetVersionURL  = "https://raw.githubusercontent.com/PharosNetwork/resources/main/mainnet.version"
+	docsNetworkURL     = "https://raw.githubusercontent.com/PharosNetwork/docs/main/network-overview/pharos-networks/README.md"
 
 	atlanticChainID = 0xa8231 // 689713
 	mainnetChainID  = 0x688   // 1672
@@ -93,7 +94,7 @@ var healthCheckCmd = &cobra.Command{
 		// === CHECK section ===
 		checks = append(checks, checkUlimit()...)
 		checks = append(checks, checkSpecVersion(hcBinDir)...)
-		checks = append(checks, checkBinaryVersion(hcBinDir, remoteRPC))
+		checks = append(checks, checkBinaryVersion(hcBinDir, network))
 		checks = append(checks, checkBlockProduction(localRPC))
 
 		// Print INFO table
@@ -377,7 +378,7 @@ func checkSpecVersion(binDir string) []checkItem {
 
 // ==================== CHECK: Binary Version ====================
 
-func checkBinaryVersion(binDir string, remoteRPC string) checkItem {
+func checkBinaryVersion(binDir string, network string) checkItem {
 	binaryPath := filepath.Join(binDir, "pharos_light")
 	libPath := filepath.Join(binDir, "libevmone.so")
 	cmdExec := exec.Command(binaryPath, "--version")
@@ -394,33 +395,51 @@ func checkBinaryVersion(binDir string, remoteRPC string) checkItem {
 		localCommit = versionStr[:idx]
 	}
 
-	// Fetch expected binary version from remote RPC via debug_protocolVersion
-	expectedCommit := ""
-	payload := []byte(`{"jsonrpc":"2.0","method":"debug_protocolVersion","params":[],"id":1}`)
-	resp, err := http.Post(remoteRPC, "application/json", bytes.NewReader(payload))
-	if err == nil {
-		defer resp.Body.Close()
-		var result struct {
-			Result struct {
-				BinaryVersion string `json:"binaryVersion"`
-			} `json:"result"`
-		}
-		if err := json.NewDecoder(resp.Body).Decode(&result); err == nil && result.Result.BinaryVersion != "" {
-			expectedCommit = result.Result.BinaryVersion
-			if idx := strings.Index(expectedCommit, "-"); idx > 0 {
-				expectedCommit = expectedCommit[:idx]
-			}
-		}
-	}
-
+	// Fetch expected binary version from docs Network page
+	expectedCommit := getExpectedBinaryVersion(network)
 	if expectedCommit == "" {
 		return checkItem{"Binary Version", "✅", fmt.Sprintf("%s (commit: %s, remote check skipped)", versionStr, localCommit)}
 	}
 
 	if localCommit == expectedCommit {
-		return checkItem{"Binary Version", "✅", fmt.Sprintf("%s (commit: %s, matches remote)", versionStr, localCommit)}
+		return checkItem{"Binary Version", "✅", fmt.Sprintf("%s (commit: %s, matches expected: %s)", versionStr, localCommit, expectedCommit)}
 	}
 	return checkItem{"Binary Version", "❌", fmt.Sprintf("%s (commit: %s, expected: %s)", versionStr, localCommit, expectedCommit)}
+}
+
+// getExpectedBinaryVersion fetches the Binary Version from the docs Network page table
+func getExpectedBinaryVersion(network string) string {
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(docsNetworkURL)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return ""
+	}
+
+	// Determine which network row to match
+	keyword := "Atlantic Testnet"
+	if strings.Contains(strings.ToLower(network), "mainnet") {
+		keyword = "Mainnet"
+	}
+
+	// Parse markdown table: find the row containing the network keyword
+	// Table format: | Network | Spec Version | Binary Version | Docker Image | Binary Package |
+	for _, line := range strings.Split(string(data), "\n") {
+		if !strings.Contains(line, keyword) {
+			continue
+		}
+		cols := strings.Split(line, "|")
+		// cols[0]="" cols[1]=Network cols[2]=SpecVersion cols[3]=BinaryVersion ...
+		if len(cols) >= 4 {
+			return strings.TrimSpace(cols[3])
+		}
+	}
+	return ""
 }
 
 // ==================== CHECK: Block Production ====================
