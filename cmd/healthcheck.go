@@ -93,7 +93,7 @@ var healthCheckCmd = &cobra.Command{
 		// === CHECK section ===
 		checks = append(checks, checkUlimit()...)
 		checks = append(checks, checkSpecVersion(hcBinDir)...)
-		checks = append(checks, checkBinaryVersion(hcBinDir))
+		checks = append(checks, checkBinaryVersion(hcBinDir, remoteRPC))
 		checks = append(checks, checkBlockProduction(localRPC))
 
 		// Print INFO table
@@ -377,7 +377,7 @@ func checkSpecVersion(binDir string) []checkItem {
 
 // ==================== CHECK: Binary Version ====================
 
-func checkBinaryVersion(binDir string) checkItem {
+func checkBinaryVersion(binDir string, remoteRPC string) checkItem {
 	binaryPath := filepath.Join(binDir, "pharos_light")
 	libPath := filepath.Join(binDir, "libevmone.so")
 	cmdExec := exec.Command(binaryPath, "--version")
@@ -389,12 +389,38 @@ func checkBinaryVersion(binDir string) checkItem {
 	}
 
 	versionStr := strings.TrimSpace(string(out))
-	commitID := versionStr
+	localCommit := versionStr
 	if idx := strings.Index(versionStr, "-"); idx > 0 {
-		commitID = versionStr[:idx]
+		localCommit = versionStr[:idx]
 	}
 
-	return checkItem{"Binary Version", "✅", fmt.Sprintf("%s (commit: %s)", versionStr, commitID)}
+	// Fetch expected binary version from remote RPC via debug_protocolVersion
+	expectedCommit := ""
+	payload := []byte(`{"jsonrpc":"2.0","method":"debug_protocolVersion","params":[],"id":1}`)
+	resp, err := http.Post(remoteRPC, "application/json", bytes.NewReader(payload))
+	if err == nil {
+		defer resp.Body.Close()
+		var result struct {
+			Result struct {
+				BinaryVersion string `json:"binaryVersion"`
+			} `json:"result"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&result); err == nil && result.Result.BinaryVersion != "" {
+			expectedCommit = result.Result.BinaryVersion
+			if idx := strings.Index(expectedCommit, "-"); idx > 0 {
+				expectedCommit = expectedCommit[:idx]
+			}
+		}
+	}
+
+	if expectedCommit == "" {
+		return checkItem{"Binary Version", "✅", fmt.Sprintf("%s (commit: %s, remote check skipped)", versionStr, localCommit)}
+	}
+
+	if localCommit == expectedCommit {
+		return checkItem{"Binary Version", "✅", fmt.Sprintf("%s (commit: %s, matches remote)", versionStr, localCommit)}
+	}
+	return checkItem{"Binary Version", "❌", fmt.Sprintf("%s (commit: %s, expected: %s)", versionStr, localCommit, expectedCommit)}
 }
 
 // ==================== CHECK: Block Production ====================
