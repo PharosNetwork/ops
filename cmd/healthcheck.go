@@ -37,7 +37,6 @@ var (
 const (
 	atlanticVersionURL = "https://raw.githubusercontent.com/PharosNetwork/resources/main/atlantic.version"
 	mainnetVersionURL  = "https://raw.githubusercontent.com/PharosNetwork/resources/main/mainnet.version"
-	docsNetworkURL     = "https://raw.githubusercontent.com/PharosNetwork/docs/main/network-overview/pharos-networks/README.md"
 
 	atlanticChainID = 0xa8231 // 689713
 	mainnetChainID  = 0x688   // 1672
@@ -395,10 +394,10 @@ func checkBinaryVersion(binDir string, network string) checkItem {
 		localCommit = versionStr[:idx]
 	}
 
-	// Fetch expected binary version from docs Network page
-	expectedCommit := getExpectedBinaryVersion(network)
+	// Fetch expected commit from resources version file
+	expectedCommit := getExpectedCommitFromResources(network)
 	if expectedCommit == "" {
-		return checkItem{"Binary Version", "✅", fmt.Sprintf("%s (commit: %s, remote check skipped)", versionStr, localCommit)}
+		return checkItem{"Binary Version", "❌", fmt.Sprintf("%s (commit: %s, failed to fetch expected version)", versionStr, localCommit)}
 	}
 
 	if localCommit == expectedCommit {
@@ -407,10 +406,15 @@ func checkBinaryVersion(binDir string, network string) checkItem {
 	return checkItem{"Binary Version", "❌", fmt.Sprintf("%s (commit: %s, expected: %s)", versionStr, localCommit, expectedCommit)}
 }
 
-// getExpectedBinaryVersion fetches the Binary Version from the docs Network page table
-func getExpectedBinaryVersion(network string) string {
+// getExpectedCommitFromResources fetches the commit field from the latest entry in the version file
+func getExpectedCommitFromResources(network string) string {
+	versionURL := atlanticVersionURL
+	if strings.Contains(strings.ToLower(network), "mainnet") {
+		versionURL = mainnetVersionURL
+	}
+
 	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(docsNetworkURL)
+	resp, err := client.Get(versionURL)
 	if err != nil {
 		return ""
 	}
@@ -421,25 +425,25 @@ func getExpectedBinaryVersion(network string) string {
 		return ""
 	}
 
-	// Determine which network row to match
-	keyword := "Atlantic Testnet"
-	if strings.Contains(strings.ToLower(network), "mainnet") {
-		keyword = "Mainnet"
+	var versions map[string]struct {
+		Version int    `json:"version"`
+		Epoch   int    `json:"epoch"`
+		Commit  string `json:"commit"`
+	}
+	if err := json.Unmarshal(data, &versions); err != nil {
+		return ""
 	}
 
-	// Parse markdown table: find the row containing the network keyword
-	// Table format: | Network | Spec Version | Binary Version | Docker Image | Binary Package |
-	for _, line := range strings.Split(string(data), "\n") {
-		if !strings.Contains(line, keyword) {
-			continue
-		}
-		cols := strings.Split(line, "|")
-		// cols[0]="" cols[1]=Network cols[2]=SpecVersion cols[3]=BinaryVersion ...
-		if len(cols) >= 4 {
-			return strings.TrimSpace(cols[3])
+	// Find the entry with the highest epoch (latest version)
+	latestCommit := ""
+	maxEpoch := -1
+	for _, v := range versions {
+		if v.Epoch > maxEpoch && v.Commit != "" {
+			maxEpoch = v.Epoch
+			latestCommit = v.Commit
 		}
 	}
-	return ""
+	return latestCommit
 }
 
 // ==================== CHECK: Block Production ====================
