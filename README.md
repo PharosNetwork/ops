@@ -741,3 +741,7 @@ Pharos Labs proprietary/confidential.
 For issues and questions:
 - GitHub Issues: https://github.com/PharosNetwork/ops/issues
 - Documentation: https://docs.pharosnetwork.xyz
+
+## Contribution
+
+Contributors have to sign CLA.
