@@ -745,3 +745,4 @@ For issues and questions:
 ## Contribution
 
 Contributors have to sign CLA.
+Main branch is protected.
