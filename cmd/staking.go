@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"os"
@@ -25,6 +26,7 @@ var (
 	delegationPoolID      string
 	delegationPubKeyPath  string
 	delegationEnabled     bool
+	delegationUnsigned    bool
 )
 
 var (
@@ -32,6 +34,7 @@ var (
 	commissionPoolID      string
 	commissionPubKeyPath  string
 	commissionRate        uint64
+	commissionUnsigned    bool
 )
 
 var (
@@ -79,6 +82,47 @@ func resolvePoolID(poolIDFlag string, pubKeyPath string) ([32]byte, error) {
 	}
 	copy(poolIDBytes32[:], poolIDBytes)
 	return poolIDBytes32, nil
+}
+
+// printUnsignedTx prints the fields needed to assemble the transaction externally
+// via the Safe web UI ("New transaction" → "Contract interaction"): contract
+// address, value, the method's ABI fragment, and raw calldata. No private key
+// required.
+func printUnsignedTx(methodName string, value *big.Int, data []byte) {
+	dataHex := "0x" + hex.EncodeToString(data)
+
+	fmt.Println("=== Unsigned transaction (for Safe web UI) ===")
+	fmt.Printf("Contract address: %s\n", stakingAddress)
+	fmt.Printf("Value (wei):      %s\n", value.String())
+	fmt.Printf("Method:           %s\n", methodName)
+	fmt.Printf("Calldata:         %s\n", dataHex)
+
+	var entries []json.RawMessage
+	if err := json.Unmarshal([]byte(stakingABI), &entries); err != nil {
+		fmt.Printf("(failed to parse ABI: %v)\n", err)
+		return
+	}
+	for _, raw := range entries {
+		var meta struct {
+			Name string `json:"name"`
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(raw, &meta); err != nil {
+			continue
+		}
+		if meta.Type != "function" || meta.Name != methodName {
+			continue
+		}
+		pretty, err := json.MarshalIndent([]json.RawMessage{raw}, "", "  ")
+		if err != nil {
+			fmt.Printf("(failed to marshal function ABI: %v)\n", err)
+			return
+		}
+		fmt.Println("\n--- Function ABI (paste into Safe \"Contract interaction\" ABI field) ---")
+		fmt.Println(string(pretty))
+		return
+	}
+	fmt.Printf("(function %q not found in ABI)\n", methodName)
 }
 
 // sendStakingTx builds, signs, sends a tx to the staking contract and waits for receipt
@@ -176,6 +220,11 @@ var setDelegationCmd = &cobra.Command{
 			return fmt.Errorf("failed to pack transaction data: %w", err)
 		}
 
+		if delegationUnsigned {
+			printUnsignedTx("setDelegationEnabled", big.NewInt(0), data)
+			return nil
+		}
+
 		return sendStakingTx(cmd, delegationRPCEndpoint, data)
 	},
 }
@@ -208,6 +257,11 @@ var setCommissionRateCmd = &cobra.Command{
 		data, err := parsedABI.Pack("setCommissionRate", poolIDBytes32, rate)
 		if err != nil {
 			return fmt.Errorf("failed to pack transaction data: %w", err)
+		}
+
+		if commissionUnsigned {
+			printUnsignedTx("setCommissionRate", big.NewInt(0), data)
+			return nil
 		}
 
 		return sendStakingTx(cmd, commissionRPCEndpoint, data)
@@ -387,12 +441,14 @@ func init() {
 	setDelegationCmd.Flags().StringVar(&delegationPoolID, "pool-id", "", "Pool ID (hex). If empty, computed from domain-pubkey")
 	setDelegationCmd.Flags().StringVar(&delegationPubKeyPath, "domain-pubkey", "./keys/domain.pub", "Path to domain public key file (used if --pool-id is empty)")
 	setDelegationCmd.Flags().BoolVar(&delegationEnabled, "enabled", true, "Enable (true) or disable (false) delegation")
+	setDelegationCmd.Flags().BoolVar(&delegationUnsigned, "unsigned", false, "Print unsigned tx fields (To/Value/Data) for Safe multisig instead of signing and broadcasting")
 
 	// set-commission-rate flags
 	setCommissionRateCmd.Flags().StringVar(&commissionRPCEndpoint, "rpc-endpoint", "http://127.0.0.1:18100", "RPC endpoint URL")
 	setCommissionRateCmd.Flags().StringVar(&commissionPoolID, "pool-id", "", "Pool ID (hex). If empty, computed from domain-pubkey")
 	setCommissionRateCmd.Flags().StringVar(&commissionPubKeyPath, "domain-pubkey", "./keys/domain.pub", "Path to domain public key file (used if --pool-id is empty)")
 	setCommissionRateCmd.Flags().Uint64Var(&commissionRate, "rate", 0, "Commission rate in basis points (0-10000, where 10000 = 100%)")
+	setCommissionRateCmd.Flags().BoolVar(&commissionUnsigned, "unsigned", false, "Print unsigned tx fields (To/Value/Data) for Safe multisig instead of signing and broadcasting")
 	setCommissionRateCmd.MarkFlagRequired("rate")
 
 	// get-validator-info flags

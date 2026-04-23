@@ -35,11 +35,13 @@ var (
 	domainEndpoint        string
 	domainPubKeyPath      string
 	stabilizingPubKeyPath string
+	addValidatorUnsigned  bool
 )
 
 var (
 	exitValidatorRPCEndpoint string
 	exitDomainPubKeyPath     string
+	exitValidatorUnsigned    bool
 )
 
 var (
@@ -48,6 +50,7 @@ var (
 	updateDomainPubKeyPath     string
 	updateDescription          string
 	updateEndpoint             string
+	updateValidatorUnsigned    bool
 )
 
 var addValidatorCmd = &cobra.Command{
@@ -56,14 +59,6 @@ var addValidatorCmd = &cobra.Command{
 	Long:  "Register a validator node to the Pharos network by calling the staking contract",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Println("Adding validator...")
-
-		// Get private key from environment variable
-		privateKeyHex := os.Getenv(ValidatorPrivateKeyEnv)
-		if privateKeyHex == "" {
-			return fmt.Errorf("private key not set. Please set environment variable %s", ValidatorPrivateKeyEnv)
-		}
-		// Remove 0x prefix if present
-		privateKeyHex = strings.TrimPrefix(privateKeyHex, "0x")
 
 		// Read domain public key (with prefix stripping)
 		domainPubKey, err := readPublicKey(domainPubKeyPath)
@@ -84,6 +79,56 @@ var addValidatorCmd = &cobra.Command{
 		if len(stabilizingPubKey) > 0 && !strings.HasPrefix(stabilizingPubKey, "0x") {
 			stabilizingPubKey = "0x" + stabilizingPubKey
 		}
+
+		// Parse stake value (in tokens, will convert to wei)
+		var stakeValue *big.Int
+		if validatorStake != "" {
+			stakeTokens, ok := new(big.Int).SetString(validatorStake, 10)
+			if !ok {
+				return fmt.Errorf("invalid stake value: %s", validatorStake)
+			}
+			// Convert tokens to wei (1 token = 10^18 wei)
+			stakeValue = new(big.Int).Mul(stakeTokens, big.NewInt(1e18))
+		} else {
+			// Default: 1,000,000 tokens
+			stakeValue = new(big.Int).Mul(big.NewInt(1000000), big.NewInt(1e18))
+		}
+
+		fmt.Printf("Stake amount: %s tokens (%s wei)\n", new(big.Int).Div(stakeValue, big.NewInt(1e18)).String(), stakeValue.String())
+
+		// Parse ABI
+		parsedABI, err := abi.JSON(strings.NewReader(stakingABI))
+		if err != nil {
+			return fmt.Errorf("failed to parse ABI: %w", err)
+		}
+
+		contractAddr := common.HexToAddress(stakingAddress)
+
+		// Pack transaction data for registerValidator
+		data, err := parsedABI.Pack("registerValidator",
+			domainLabel,       // description
+			domainPubKey,      // publicKey
+			"0x00",            // proofOfPossession (placeholder)
+			stabilizingPubKey, // blsPublicKey
+			"0x00",            // blsProofOfPossession (placeholder)
+			domainEndpoint,    // endpoint
+		)
+		if err != nil {
+			return fmt.Errorf("failed to pack transaction data: %w", err)
+		}
+
+		if addValidatorUnsigned {
+			printUnsignedTx("registerValidator", stakeValue, data)
+			return nil
+		}
+
+		// Get private key from environment variable
+		privateKeyHex := os.Getenv(ValidatorPrivateKeyEnv)
+		if privateKeyHex == "" {
+			return fmt.Errorf("private key not set. Please set environment variable %s", ValidatorPrivateKeyEnv)
+		}
+		// Remove 0x prefix if present
+		privateKeyHex = strings.TrimPrefix(privateKeyHex, "0x")
 
 		// Connect to Ethereum client
 		client, err := ethclient.Dial(validatorRPCEndpoint)
@@ -121,25 +166,9 @@ var addValidatorCmd = &cobra.Command{
 			return fmt.Errorf("failed to create transactor: %w", err)
 		}
 
-		// Parse stake value (in tokens, will convert to wei)
-		var stakeValue *big.Int
-		if validatorStake != "" {
-			stakeTokens, ok := new(big.Int).SetString(validatorStake, 10)
-			if !ok {
-				return fmt.Errorf("invalid stake value: %s", validatorStake)
-			}
-			// Convert tokens to wei (1 token = 10^18 wei)
-			stakeValue = new(big.Int).Mul(stakeTokens, big.NewInt(1e18))
-		} else {
-			// Default: 1,000,000 tokens
-			stakeValue = new(big.Int).Mul(big.NewInt(1000000), big.NewInt(1e18))
-		}
-
 		// Set transaction parameters
 		auth.Value = stakeValue
 		auth.GasPrice = big.NewInt(1000000000) // 1 Gwei
-
-		fmt.Printf("Stake amount: %s tokens (%s wei)\n", new(big.Int).Div(stakeValue, big.NewInt(1e18)).String(), stakeValue.String())
 
 		// Get nonce
 		nonce, err := client.PendingNonceAt(cmd.Context(), auth.From)
@@ -147,27 +176,6 @@ var addValidatorCmd = &cobra.Command{
 			return fmt.Errorf("failed to get nonce: %w", err)
 		}
 		auth.Nonce = big.NewInt(int64(nonce))
-
-		// Parse ABI
-		parsedABI, err := abi.JSON(strings.NewReader(stakingABI))
-		if err != nil {
-			return fmt.Errorf("failed to parse ABI: %w", err)
-		}
-
-		contractAddr := common.HexToAddress(stakingAddress)
-
-		// Pack transaction data for registerValidator
-		data, err := parsedABI.Pack("registerValidator",
-			domainLabel,       // description
-			domainPubKey,      // publicKey
-			"0x00",            // proofOfPossession (placeholder)
-			stabilizingPubKey, // blsPublicKey
-			"0x00",            // blsProofOfPossession (placeholder)
-			domainEndpoint,    // endpoint
-		)
-		if err != nil {
-			return fmt.Errorf("failed to pack transaction data: %w", err)
-		}
 
 		// Create transaction
 		tx := types.NewTransaction(
@@ -222,6 +230,44 @@ var exitValidatorCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Println("Exiting validator...")
 
+		// Read domain public key
+		domainPubKey, err := readPublicKey(exitDomainPubKeyPath)
+		if err != nil {
+			return fmt.Errorf("failed to read domain public key: %w", err)
+		}
+
+		// Calculate pool ID (SHA256 of public key)
+		pubKeyBytes, err := hex.DecodeString(domainPubKey)
+		if err != nil {
+			return fmt.Errorf("failed to decode public key: %w", err)
+		}
+
+		poolID := sha256.Sum256(pubKeyBytes)
+		fmt.Printf("Pool ID: %s\n", hex.EncodeToString(poolID[:]))
+
+		// Prepare parameters for exitValidator
+		var poolIDBytes32 [32]byte
+		copy(poolIDBytes32[:], poolID[:])
+
+		// Parse ABI
+		parsedABI, err := abi.JSON(strings.NewReader(stakingABI))
+		if err != nil {
+			return fmt.Errorf("failed to parse ABI: %w", err)
+		}
+
+		contractAddr := common.HexToAddress(stakingAddress)
+
+		// Pack transaction data
+		data, err := parsedABI.Pack("exitValidator", poolIDBytes32)
+		if err != nil {
+			return fmt.Errorf("failed to pack transaction data: %w", err)
+		}
+
+		if exitValidatorUnsigned {
+			printUnsignedTx("exitValidator", big.NewInt(0), data)
+			return nil
+		}
+
 		// Get private key from environment variable
 		privateKeyHex := os.Getenv(ValidatorPrivateKeyEnv)
 		if privateKeyHex == "" {
@@ -244,21 +290,6 @@ var exitValidatorCmd = &cobra.Command{
 		}
 		accountAddress := crypto.PubkeyToAddress(*publicKeyECDSA)
 		fmt.Printf("Account address: %s\n", accountAddress.Hex())
-
-		// Read domain public key
-		domainPubKey, err := readPublicKey(exitDomainPubKeyPath)
-		if err != nil {
-			return fmt.Errorf("failed to read domain public key: %w", err)
-		}
-
-		// Calculate pool ID (SHA256 of public key)
-		pubKeyBytes, err := hex.DecodeString(domainPubKey)
-		if err != nil {
-			return fmt.Errorf("failed to decode public key: %w", err)
-		}
-
-		poolID := sha256.Sum256(pubKeyBytes)
-		fmt.Printf("Pool ID: %s\n", hex.EncodeToString(poolID[:]))
 
 		// Connect to Ethereum client
 		client, err := ethclient.Dial(exitValidatorRPCEndpoint)
@@ -292,24 +323,6 @@ var exitValidatorCmd = &cobra.Command{
 			return fmt.Errorf("failed to get nonce: %w", err)
 		}
 		auth.Nonce = big.NewInt(int64(nonce))
-
-		// Parse ABI
-		parsedABI, err := abi.JSON(strings.NewReader(stakingABI))
-		if err != nil {
-			return fmt.Errorf("failed to parse ABI: %w", err)
-		}
-
-		contractAddr := common.HexToAddress(stakingAddress)
-
-		// Prepare parameters for exitValidator
-		var poolIDBytes32 [32]byte
-		copy(poolIDBytes32[:], poolID[:])
-
-		// Pack transaction data
-		data, err := parsedABI.Pack("exitValidator", poolIDBytes32)
-		if err != nil {
-			return fmt.Errorf("failed to pack transaction data: %w", err)
-		}
 
 		// Create transaction
 		tx := types.NewTransaction(
@@ -358,28 +371,6 @@ var updateValidatorCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Println("Updating validator...")
 
-		// Get private key from environment variable
-		privateKeyHex := os.Getenv(ValidatorPrivateKeyEnv)
-		if privateKeyHex == "" {
-			return fmt.Errorf("private key not set. Please set environment variable %s", ValidatorPrivateKeyEnv)
-		}
-		privateKeyHex = strings.TrimPrefix(privateKeyHex, "0x")
-
-		// Load private key
-		privateKey, err := crypto.HexToECDSA(privateKeyHex)
-		if err != nil {
-			return fmt.Errorf("failed to load private key: %w", err)
-		}
-
-		// Get account address
-		publicKey := privateKey.Public()
-		publicKeyECDSA, ok := publicKey.(*ecdsa.PublicKey)
-		if !ok {
-			return fmt.Errorf("failed to get public key")
-		}
-		accountAddress := crypto.PubkeyToAddress(*publicKeyECDSA)
-		fmt.Printf("Account address: %s\n", accountAddress.Hex())
-
 		// Resolve pool ID
 		var poolIDBytes32 [32]byte
 		if updateValidatorPoolID != "" {
@@ -407,6 +398,47 @@ var updateValidatorCmd = &cobra.Command{
 			copy(poolIDBytes32[:], poolID[:])
 		}
 		fmt.Printf("Pool ID: %s\n", hex.EncodeToString(poolIDBytes32[:]))
+
+		// Parse ABI
+		parsedABI, err := abi.JSON(strings.NewReader(stakingABI))
+		if err != nil {
+			return fmt.Errorf("failed to parse ABI: %w", err)
+		}
+
+		contractAddr := common.HexToAddress(stakingAddress)
+
+		// Pack transaction data for updateValidator
+		data, err := parsedABI.Pack("updateValidator", poolIDBytes32, updateDescription, updateEndpoint)
+		if err != nil {
+			return fmt.Errorf("failed to pack transaction data: %w", err)
+		}
+
+		if updateValidatorUnsigned {
+			printUnsignedTx("updateValidator", big.NewInt(0), data)
+			return nil
+		}
+
+		// Get private key from environment variable
+		privateKeyHex := os.Getenv(ValidatorPrivateKeyEnv)
+		if privateKeyHex == "" {
+			return fmt.Errorf("private key not set. Please set environment variable %s", ValidatorPrivateKeyEnv)
+		}
+		privateKeyHex = strings.TrimPrefix(privateKeyHex, "0x")
+
+		// Load private key
+		privateKey, err := crypto.HexToECDSA(privateKeyHex)
+		if err != nil {
+			return fmt.Errorf("failed to load private key: %w", err)
+		}
+
+		// Get account address
+		publicKey := privateKey.Public()
+		publicKeyECDSA, ok := publicKey.(*ecdsa.PublicKey)
+		if !ok {
+			return fmt.Errorf("failed to get public key")
+		}
+		accountAddress := crypto.PubkeyToAddress(*publicKeyECDSA)
+		fmt.Printf("Account address: %s\n", accountAddress.Hex())
 
 		// Connect to Ethereum client
 		client, err := ethclient.Dial(updateValidatorRPCEndpoint)
@@ -440,20 +472,6 @@ var updateValidatorCmd = &cobra.Command{
 			return fmt.Errorf("failed to get nonce: %w", err)
 		}
 		auth.Nonce = big.NewInt(int64(nonce))
-
-		// Parse ABI
-		parsedABI, err := abi.JSON(strings.NewReader(stakingABI))
-		if err != nil {
-			return fmt.Errorf("failed to parse ABI: %w", err)
-		}
-
-		contractAddr := common.HexToAddress(stakingAddress)
-
-		// Pack transaction data for updateValidator
-		data, err := parsedABI.Pack("updateValidator", poolIDBytes32, updateDescription, updateEndpoint)
-		if err != nil {
-			return fmt.Errorf("failed to pack transaction data: %w", err)
-		}
 
 		// Create transaction
 		tx := types.NewTransaction(
@@ -534,6 +552,7 @@ func init() {
 	addValidatorCmd.Flags().StringVar(&domainEndpoint, "domain-endpoint", "", "Domain endpoint URL")
 	addValidatorCmd.Flags().StringVar(&domainPubKeyPath, "domain-pubkey", "./keys/domain.pub", "Path to domain public key file")
 	addValidatorCmd.Flags().StringVar(&stabilizingPubKeyPath, "stabilizing-pubkey", "./keys/stabilizing.pub", "Path to stabilizing public key file")
+	addValidatorCmd.Flags().BoolVar(&addValidatorUnsigned, "unsigned", false, "Print unsigned tx fields (To/Value/Data) for Safe multisig instead of signing and broadcasting")
 
 	addValidatorCmd.MarkFlagRequired("domain-label")
 	addValidatorCmd.MarkFlagRequired("domain-endpoint")
@@ -541,6 +560,7 @@ func init() {
 	// exit-validator flags
 	exitValidatorCmd.Flags().StringVar(&exitValidatorRPCEndpoint, "rpc-endpoint", "http://127.0.0.1:18100", "RPC endpoint URL")
 	exitValidatorCmd.Flags().StringVar(&exitDomainPubKeyPath, "domain-pubkey", "./keys/domain.pub", "Path to domain public key file")
+	exitValidatorCmd.Flags().BoolVar(&exitValidatorUnsigned, "unsigned", false, "Print unsigned tx fields (To/Value/Data) for Safe multisig instead of signing and broadcasting")
 
 	// update-validator flags
 	updateValidatorCmd.Flags().StringVar(&updateValidatorRPCEndpoint, "rpc-endpoint", "http://127.0.0.1:18100", "RPC endpoint URL")
@@ -548,6 +568,7 @@ func init() {
 	updateValidatorCmd.Flags().StringVar(&updateDomainPubKeyPath, "domain-pubkey", "./keys/domain.pub", "Path to domain public key file (used if --pool-id is empty)")
 	updateValidatorCmd.Flags().StringVar(&updateDescription, "description", "", "New validator description")
 	updateValidatorCmd.Flags().StringVar(&updateEndpoint, "endpoint", "", "New validator endpoint URL")
+	updateValidatorCmd.Flags().BoolVar(&updateValidatorUnsigned, "unsigned", false, "Print unsigned tx fields (To/Value/Data) for Safe multisig instead of signing and broadcasting")
 
 	updateValidatorCmd.MarkFlagRequired("description")
 	updateValidatorCmd.MarkFlagRequired("endpoint")
