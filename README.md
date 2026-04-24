@@ -189,6 +189,7 @@ export VALIDATOR_PRIVATE_KEY=YOUR_PRIVATE_KEY_HERE
 - `--stake` - Stake amount in tokens (default: `1000000`)
 - `--domain-pubkey` - Path to domain public key (default: `./keys/domain.pub`)
 - `--stabilizing-pubkey` - Path to stabilizing public key (default: `./keys/stabilizing.pub`)
+- `--unsigned` - Print the unsigned transaction (contract address, value in wei, method, calldata, function ABI) for a Safe multisig instead of signing and broadcasting. `VALIDATOR_PRIVATE_KEY` is not required in this mode. See [Using `--unsigned` with a Safe multisig](#using---unsigned-with-a-safe-multisig).
 
 **Example:**
 ```bash
@@ -238,6 +239,7 @@ export VALIDATOR_PRIVATE_KEY=YOUR_PRIVATE_KEY_HERE
 - `--rpc-endpoint` - RPC endpoint to send transaction (default: `http://127.0.0.1:18100`)
 - `--pool-id` - Pool ID (hex, 64 characters). If provided, `--domain-pubkey` is ignored
 - `--domain-pubkey` - Path to domain public key (default: `./keys/domain.pub`, used only when `--pool-id` is empty)
+- `--unsigned` - Print the unsigned transaction for a Safe multisig instead of signing and broadcasting. `VALIDATOR_PRIVATE_KEY` is not required in this mode. See [Using `--unsigned` with a Safe multisig](#using---unsigned-with-a-safe-multisig).
 
 **Example:**
 ```bash
@@ -279,6 +281,7 @@ export VALIDATOR_PRIVATE_KEY=YOUR_PRIVATE_KEY_HERE
 **Optional Parameters:**
 - `--rpc-endpoint` - RPC endpoint to send transaction (default: `http://127.0.0.1:18100`)
 - `--domain-pubkey` - Path to domain public key (default: `./keys/domain.pub`)
+- `--unsigned` - Print the unsigned transaction for a Safe multisig instead of signing and broadcasting. `VALIDATOR_PRIVATE_KEY` is not required in this mode. See [Using `--unsigned` with a Safe multisig](#using---unsigned-with-a-safe-multisig).
 
 **Example:**
 ```bash
@@ -325,6 +328,7 @@ export VALIDATOR_PRIVATE_KEY=YOUR_PRIVATE_KEY_HERE
 - `--pool-id` - Pool ID (hex, 64 characters). If empty, computed from `--domain-pubkey`
 - `--domain-pubkey` - Path to domain public key (default: `./keys/domain.pub`)
 - `--enabled` - Enable (true) or disable (false) delegation (default: `true`)
+- `--unsigned` - Print the unsigned transaction for a Safe multisig instead of signing and broadcasting. `VALIDATOR_PRIVATE_KEY` is not required in this mode. See [Using `--unsigned` with a Safe multisig](#using---unsigned-with-a-safe-multisig).
 
 **Example:**
 ```bash
@@ -357,6 +361,7 @@ export VALIDATOR_PRIVATE_KEY=YOUR_PRIVATE_KEY_HERE
 - `--rpc-endpoint` - RPC endpoint to send transaction (default: `http://127.0.0.1:18100`)
 - `--pool-id` - Pool ID (hex, 64 characters). If empty, computed from `--domain-pubkey`
 - `--domain-pubkey` - Path to domain public key (default: `./keys/domain.pub`)
+- `--unsigned` - Print the unsigned transaction for a Safe multisig instead of signing and broadcasting. `VALIDATOR_PRIVATE_KEY` is not required in this mode. See [Using `--unsigned` with a Safe multisig](#using---unsigned-with-a-safe-multisig).
 
 **Rate Examples:**
 - `100` = 1%
@@ -374,6 +379,191 @@ export VALIDATOR_PRIVATE_KEY=abcdef1234567890abcdef1234567890abcdef1234567890abc
   --rpc-endpoint http://127.0.0.1:18100 \
   --rate 500
 ```
+
+### Set Delegation Approver
+
+Set (or clear) the delegation approver address for your validator pool. When an approver is set, the contract accepts `delegateWithApproval` calls signed by that approver; passing the zero address clears the approver (which only the validator owner is authorized to do).
+
+```bash
+# Set private key via environment variable (required unless using --unsigned)
+export VALIDATOR_PRIVATE_KEY=YOUR_PRIVATE_KEY_HERE
+
+# Set an approver
+./ops set-delegation-approver --approver 0xApproverAddress
+
+# Clear the approver (owner only)
+./ops set-delegation-approver --approver 0x0000000000000000000000000000000000000000
+```
+
+**Environment Variable (Required unless `--unsigned`):**
+- `VALIDATOR_PRIVATE_KEY` - Private key for transaction signing (hex format, with or without 0x prefix)
+
+**Required Parameters:**
+- `--approver` - Approver address (`0x...`). Pass the zero address to clear the approver (owner only)
+
+**Optional Parameters:**
+- `--rpc-endpoint` - RPC endpoint to send transaction (default: `http://127.0.0.1:18100`)
+- `--pool-id` - Pool ID (hex, 64 characters). If empty, computed from `--domain-pubkey`
+- `--domain-pubkey` - Path to domain public key (default: `./keys/domain.pub`)
+- `--unsigned` - Print the unsigned transaction for a Safe multisig instead of signing and broadcasting. See [Using `--unsigned` with a Safe multisig](#using---unsigned-with-a-safe-multisig).
+
+### Withdraw Stake
+
+Withdraw a portion of the validator owner's own stake. The withdrawn amount enters the unbonding window; use `claim-stake` later to collect it.
+
+```bash
+export VALIDATOR_PRIVATE_KEY=YOUR_PRIVATE_KEY_HERE
+
+# Withdraw 500 tokens from your own stake
+./ops withdraw-stake --amount 500
+```
+
+**Environment Variable (Required unless `--unsigned`):**
+- `VALIDATOR_PRIVATE_KEY` - Private key for transaction signing (hex format, with or without 0x prefix)
+
+**Required Parameters:**
+- `--amount` - Amount to withdraw, in whole tokens (the tool multiplies by `1e18` to get wei)
+
+**Optional Parameters:**
+- `--rpc-endpoint` - RPC endpoint to send transaction (default: `http://127.0.0.1:18100`)
+- `--pool-id` - Pool ID (hex, 64 characters). If empty, computed from `--domain-pubkey`
+- `--domain-pubkey` - Path to domain public key (default: `./keys/domain.pub`)
+- `--unsigned` - Print the unsigned transaction for a Safe multisig instead of signing and broadcasting. See [Using `--unsigned` with a Safe multisig](#using---unsigned-with-a-safe-multisig).
+
+### Claim Stake
+
+Claim stake that has already completed the withdrawal window (from a previous `withdraw-stake` or `exit-validator`). Transfers the unlocked amount back to the owner address.
+
+```bash
+export VALIDATOR_PRIVATE_KEY=YOUR_PRIVATE_KEY_HERE
+
+./ops claim-stake
+```
+
+**Environment Variable (Required unless `--unsigned`):**
+- `VALIDATOR_PRIVATE_KEY` - Private key for transaction signing (hex format, with or without 0x prefix)
+
+**Optional Parameters:**
+- `--rpc-endpoint` - RPC endpoint to send transaction (default: `http://127.0.0.1:18100`)
+- `--pool-id` - Pool ID (hex, 64 characters). If empty, computed from `--domain-pubkey`
+- `--domain-pubkey` - Path to domain public key (default: `./keys/domain.pub`)
+- `--unsigned` - Print the unsigned transaction for a Safe multisig instead of signing and broadcasting. See [Using `--unsigned` with a Safe multisig](#using---unsigned-with-a-safe-multisig).
+
+### Claim Reward
+
+Claim accrued validator rewards to the owner address.
+
+```bash
+export VALIDATOR_PRIVATE_KEY=YOUR_PRIVATE_KEY_HERE
+
+./ops claim-reward
+```
+
+**Environment Variable (Required unless `--unsigned`):**
+- `VALIDATOR_PRIVATE_KEY` - Private key for transaction signing (hex format, with or without 0x prefix)
+
+**Optional Parameters:**
+- `--rpc-endpoint` - RPC endpoint to send transaction (default: `http://127.0.0.1:18100`)
+- `--pool-id` - Pool ID (hex, 64 characters). If empty, computed from `--domain-pubkey`
+- `--domain-pubkey` - Path to domain public key (default: `./keys/domain.pub`)
+- `--unsigned` - Print the unsigned transaction for a Safe multisig instead of signing and broadcasting. See [Using `--unsigned` with a Safe multisig](#using---unsigned-with-a-safe-multisig).
+
+**Tip:** If rewards look stale, run `settle-reward` first to settle pending reward accounting, then `claim-reward`.
+
+### Compound Rewards
+
+Compound accrued rewards back into the validator's stake instead of withdrawing them.
+
+```bash
+export VALIDATOR_PRIVATE_KEY=YOUR_PRIVATE_KEY_HERE
+
+./ops compound-rewards
+```
+
+**Environment Variable (Required unless `--unsigned`):**
+- `VALIDATOR_PRIVATE_KEY` - Private key for transaction signing (hex format, with or without 0x prefix)
+
+**Optional Parameters:**
+- `--rpc-endpoint` - RPC endpoint to send transaction (default: `http://127.0.0.1:18100`)
+- `--pool-id` - Pool ID (hex, 64 characters). If empty, computed from `--domain-pubkey`
+- `--domain-pubkey` - Path to domain public key (default: `./keys/domain.pub`)
+- `--unsigned` - Print the unsigned transaction for a Safe multisig instead of signing and broadcasting. See [Using `--unsigned` with a Safe multisig](#using---unsigned-with-a-safe-multisig).
+
+### Settle Reward
+
+Settle pending reward accounting for your pool. Usually called before `claim-reward` or `compound-rewards` when the displayed reward amount looks stale.
+
+```bash
+export VALIDATOR_PRIVATE_KEY=YOUR_PRIVATE_KEY_HERE
+
+./ops settle-reward
+```
+
+**Environment Variable (Required unless `--unsigned`):**
+- `VALIDATOR_PRIVATE_KEY` - Private key for transaction signing (hex format, with or without 0x prefix)
+
+**Optional Parameters:**
+- `--rpc-endpoint` - RPC endpoint to send transaction (default: `http://127.0.0.1:18100`)
+- `--pool-id` - Pool ID (hex, 64 characters). If empty, computed from `--domain-pubkey`
+- `--domain-pubkey` - Path to domain public key (default: `./keys/domain.pub`)
+- `--unsigned` - Print the unsigned transaction for a Safe multisig instead of signing and broadcasting. See [Using `--unsigned` with a Safe multisig](#using---unsigned-with-a-safe-multisig).
+
+### Using `--unsigned` with a Safe multisig
+
+If the validator owner is a Safe (Gnosis Safe) multisig, you cannot sign transactions locally with `VALIDATOR_PRIVATE_KEY`. Every write command in this tool (`add-validator`, `update-validator`, `exit-validator`, `set-delegation`, `set-commission-rate`, `set-delegation-approver`, `withdraw-stake`, `claim-stake`, `claim-reward`, `compound-rewards`, `settle-reward`) supports `--unsigned`, which skips signing/broadcasting and prints everything the Safe web UI needs to build the transaction manually:
+
+- **Contract address** — the staking precompile
+- **Value (wei)** — always `0` except for `add-validator`, which requires the registration stake
+- **Method** — the contract function name
+- **Calldata** — ABI-encoded `0x…` payload
+- **Function ABI** — the single-function JSON fragment to paste into Safe's "Contract interaction" ABI field
+
+`VALIDATOR_PRIVATE_KEY` is **not** required when using `--unsigned`.
+
+**Example:**
+```bash
+./ops set-commission-rate \
+  --pool-id 0x1111111111111111111111111111111111111111111111111111111111111111 \
+  --rate 500 \
+  --unsigned
+```
+
+**Output:**
+```
+Setting commission rate to 500 (5.00%) for pool 1111...1111
+=== Unsigned transaction (for Safe web UI) ===
+Contract address: 0x4100000000000000000000000000000000000000
+Value (wei):      0
+Method:           setCommissionRate
+Calldata:         0x031e7f5d11111111...00000001f4
+
+--- Function ABI (paste into Safe "Contract interaction" ABI field) ---
+[
+  {
+    "inputs": [
+      { "internalType": "bytes32", "name": "_poolId", "type": "bytes32" },
+      { "internalType": "uint256", "name": "_newRate", "type": "uint256" }
+    ],
+    "name": "setCommissionRate",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  }
+]
+```
+
+**Safe web UI flow:**
+1. Open your Safe → **New transaction** → **Contract interaction**
+2. **Contract address**: paste the printed value
+3. **ABI**: paste the printed Function ABI fragment, then pick the matching **Method**
+4. Fill in each parameter shown by the Safe UI. Either fill them from your original CLI arguments, or paste the raw **Calldata** into Safe's "custom data" field — both paths produce the same transaction
+5. **Value**: paste the printed `Value (wei)` (non-zero only for `add-validator`)
+6. Submit for signer review, then execute once the threshold is reached
+
+**Notes:**
+- `add-validator --unsigned` prints a non-zero `Value (wei)` equal to your `--stake` (tokens × 1e18). Make sure the Safe has that balance before executing.
+- `setDelegationApprover` with the zero address is allowed only when the caller is the validator owner. The Safe must be the owner.
+- Commands that read values (`get-validator-info`, `get-nodeid`, `health-check`, `network-test`) do not send transactions and therefore have no `--unsigned` flag.
 
 ### Get Validator Information
 
@@ -581,7 +771,15 @@ PUBLIC_IP=$(curl -s ifconfig.me)
 |---------|-------------|
 | `set-delegation` | Enable or disable delegation for your validator |
 | `set-commission-rate` | Set commission rate (0-10000 basis points) |
+| `set-delegation-approver` | Set or clear the delegation approver address |
+| `withdraw-stake` | Withdraw a portion of your own stake (enters unbonding) |
+| `claim-stake` | Claim stake that has finished the withdrawal window |
+| `claim-reward` | Claim accrued validator rewards |
+| `compound-rewards` | Compound accrued rewards back into stake |
+| `settle-reward` | Settle pending reward accounting |
 | `get-validator-info` | Query validator information, staking details, and settings |
+
+All write commands above (and every validator write command in the table above) accept `--unsigned` to emit a Safe-ready transaction payload instead of signing. See [Using `--unsigned` with a Safe multisig](#using---unsigned-with-a-safe-multisig).
 
 ### Diagnostics & Monitoring
 
@@ -695,9 +893,10 @@ If validator commands fail with connection errors:
 If validator registration or staking commands fail:
 - Ensure the account has sufficient balance for gas fees
 - Check that the private key is correct (64 hex characters, with or without 0x prefix)
-- Verify the `VALIDATOR_PRIVATE_KEY` environment variable is set
+- Verify the `VALIDATOR_PRIVATE_KEY` environment variable is set (not needed when using `--unsigned`)
 - Verify the network is accepting new validators
 - For staking commands, ensure you are already registered as a validator
+- If the validator owner is a Safe multisig, use `--unsigned` to produce a payload for the Safe web UI instead of signing locally. See [Using `--unsigned` with a Safe multisig](#using---unsigned-with-a-safe-multisig).
 
 ### Pool ID vs Node ID
 
