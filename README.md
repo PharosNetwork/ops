@@ -181,7 +181,7 @@ export VALIDATOR_PRIVATE_KEY=YOUR_PRIVATE_KEY_HERE
 - `--domain-label` - Validator name/description
 - `--domain-endpoint` - Your validator's **public** endpoint URL (must be accessible from other nodes)
   - For IP:PORT format: must use `tcp://` prefix with your **public IP** (e.g., `tcp://YOUR_PUBLIC_IP:19000`)
-  - For domain names: can use any protocol (e.g., `https://pharos.validator.com`)
+  - For domain names: only TCP protocol is supported in the current version, and the domain port must be the consensus port (default: 19000), e.g., tcp://yourdomain:19000.
   - ⚠️ **Do NOT use `127.0.0.1` or `localhost`** - other nodes cannot connect to your validator
 
 **Optional Parameters:**
