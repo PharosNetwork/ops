@@ -507,6 +507,7 @@ var (
 	ntPort        string
 	ntCount       int
 	ntJSON        bool
+	ntAll         bool
 )
 
 var networkTestCmd = &cobra.Command{
@@ -559,21 +560,27 @@ var networkTestCmd = &cobra.Command{
 
 		var endpoints []validatorEndpoint
 
-		// Try to get active validators from getActiveValidators
-		activeData, err := parsedABI.Pack("getActiveValidators")
+		// Choose which validator list to fetch
+		fetchMethod := "getActiveValidators"
+		if ntAll {
+			fetchMethod = "getAllValidators"
+			fmt.Println("Mode: all validators (active + pending)")
+		} else {
+			fmt.Println("Mode: active validators only (use --all to include pending)")
+		}
+
+		listData, err := parsedABI.Pack(fetchMethod)
 		if err == nil {
-			activeResult, err := client.CallContract(cmd.Context(), ethereum.CallMsg{
+			listResult, err := client.CallContract(cmd.Context(), ethereum.CallMsg{
 				To:   &contractAddr,
-				Data: activeData,
+				Data: listData,
 			}, nil)
-			if err == nil && len(activeResult) > 0 {
-				activeResults, err := parsedABI.Unpack("getActiveValidators", activeResult)
-				if err == nil && len(activeResults) > 0 {
-					// activeResults[0] should be []bytes32
-					poolIDs, ok := activeResults[0].([][32]byte)
+			if err == nil && len(listResult) > 0 {
+				listResults, err := parsedABI.Unpack(fetchMethod, listResult)
+				if err == nil && len(listResults) > 0 {
+					poolIDs, ok := listResults[0].([][32]byte)
 					if ok {
 						for _, pid := range poolIDs {
-							// Get validator info for each pool ID
 							vData, err := parsedABI.Pack("getValidator", pid)
 							if err != nil {
 								continue
@@ -595,9 +602,23 @@ var networkTestCmd = &cobra.Command{
 							}
 							ep := v.FieldByName("Endpoint").String()
 							desc := v.FieldByName("Description").String()
+							status := uint8(v.FieldByName("Status").Uint())
+							statusTag := ""
+							if ntAll {
+								switch status {
+								case 0:
+									statusTag = " [pending]"
+								case 1:
+									statusTag = " [active]"
+								case 2:
+									statusTag = " [exiting]"
+								default:
+									statusTag = fmt.Sprintf(" [status:%d]", status)
+								}
+							}
 							if ep != "" {
 								endpoints = append(endpoints, validatorEndpoint{
-									Tag:      desc,
+									Tag:      desc + statusTag,
 									Endpoint: ep,
 									PoolID:   "0x" + hex.EncodeToString(pid[:]),
 								})
@@ -795,4 +816,5 @@ func init() {
 	networkTestCmd.Flags().StringVar(&ntPort, "port", "18100", "TCP port to test")
 	networkTestCmd.Flags().IntVar(&ntCount, "count", 3, "Number of TCP probes per endpoint")
 	networkTestCmd.Flags().BoolVar(&ntJSON, "json", false, "Output results in JSON format")
+	networkTestCmd.Flags().BoolVar(&ntAll, "all", false, "Test all validators (active + pending), not just active")
 }
