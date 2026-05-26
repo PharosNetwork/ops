@@ -135,6 +135,78 @@ Stop the running node:
 ./ops stop --force
 ```
 
+## Generating a fresh chain genesis
+
+`generate-genesis` produces a chain `genesis.conf` from a `deploy.json` plus
+a pre-generated key tree. This is the command you use when you need a
+brand-new chain — for CI/integration testing, a private devnet, or any
+scenario where you want a known admin account pre-funded at genesis.
+
+Without this command, the equivalent flow required Python `aldaba-ops generate`;
+this binary makes the Python toolchain optional.
+
+### What it does
+
+Mirrors the EVM storage-slot logic from `aldaba_ops/toolkit/conf.py` — every
+slot the resulting genesis writes (validator records, staking V2 delegation,
+ChainConfig configs array, RuleManager packed slot, OpenZeppelin AccessControl
+roles, disabled initializers, TransactionDeny owner) is byte-identical to
+what the Python tool produces. The Go port is covered by golden-file tests
+against the Python reference.
+
+### Inputs
+
+- A `deploy.json` (see `scripts/deploy.chain.light.json` in the AldabaNG repo
+  for an example): contains `admin_addr`, `chain_id`, `genesis_tpl`, and
+  per-domain config (endpoint, stake).
+- A `genesis.tpl.conf` template — typically lives in the same project tree
+  next to `deploy.json`; the path is resolved relative to `deploy.json`'s
+  directory.
+- A pre-generated key tree per domain:
+
+  ```
+  <keys-dir>/
+    prime256v1/<domain_label>/{domain.key, domain.pub, domain.pop}
+    bls12381/<domain_label>/{stabilizing.key, stabilizing.pub, stabilizing.pop}
+  ```
+
+  `.key` files are encrypted PKCS8 PEM with the password from `--key-passwd`
+  (or `set-password`). `.pop` files are Proof-of-Possession outputs from
+  `pharos_cli crypto -t gen-pop`. `.pub` is optional — if missing for the
+  prime256v1 key, it's extracted from `.key` via openssl.
+
+### Usage
+
+```bash
+./ops generate-genesis \
+  --deploy ./deploy.chain.light.json \
+  --keys-dir ./resources/domain_keys \
+  --output ./genesis.conf \
+  --key-passwd 123abc \
+  --timestamp 1700000000000
+```
+
+`--timestamp` is the chain epoch start in milliseconds. Omit (or pass `0`)
+to use the current wall-clock time; pin to a fixed value when you need
+reproducible builds.
+
+After this you can `bootstrap` and `start` as usual:
+
+```bash
+./ops set-password 123abc
+./ops generate-keys
+./ops bootstrap --config ./pharos.conf
+./ops start --config ./pharos.conf
+```
+
+### Limitations
+
+- Light-mode topologies only (one cluster entry per domain).
+- The `.pop` files must be pre-generated. `cmd/generate-keys` doesn't yet
+  emit them — pipe through `pharos_cli crypto -t gen-pop` for now.
+- Out of scope: multi-node deployment orchestration, per-domain
+  `domain_<label>.json` cluster files — those are ops/runbook concerns.
+
 ## Validator Management
 
 ### Get Node ID / Pool ID
@@ -756,6 +828,7 @@ PUBLIC_IP=$(curl -s ifconfig.me)
 | `bootstrap --config <path>` | Initialize genesis state |
 | `start --config <path>` | Start pharos_light service |
 | `stop` | Stop pharos_light service |
+| `generate-genesis` | Build `genesis.conf` from a `deploy.json` (for spinning up a fresh chain — see [Generating a fresh chain genesis](#generating-a-fresh-chain-genesis)) |
 
 ### Validator Operations
 
