@@ -20,8 +20,9 @@ func TestLoadGenesisTemplate(t *testing.T) {
 	if tpl.Configs() == nil {
 		t.Fatal("Configs() is nil")
 	}
-	if tpl.Configs().Len() != 27 {
-		t.Errorf("Configs.Len = %d, want 27", tpl.Configs().Len())
+	// v0.13.1 template ships 29 config keys (was 27 in older tpl).
+	if tpl.Configs().Len() != 29 {
+		t.Errorf("Configs.Len = %d, want 29", tpl.Configs().Len())
 	}
 	if cid, _ := tpl.Configs().Get("chainId"); cid != "35039958" {
 		t.Errorf("chainId = %q, want 35039958", cid)

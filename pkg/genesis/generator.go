@@ -144,30 +144,39 @@ func (g *Generator) Run(outputPath string) error {
 		}
 		nodeID := hex.EncodeToString(sha256Sum(pubkeyBytes))
 
-		// 1.4 build the genesis.domains[label] entry.
+		// 1.4 stake in wei (used both in the domains[] entry and in
+		// per-validator slot generation below).
+		domainStakeWei := new(big.Int).Mul(
+			new(big.Int).SetUint64(dc.InitialStakeInGwei),
+			big.NewInt(1_000_000_000),
+		)
+
+		// 1.5 build the genesis.domains[label] entry. Field shapes and
+		// order mirror what `mirror/release/v0.13.1` (and Atlantic prod)
+		// emit — pharos_cli's genesis parser is strict:
+		//   - stabilizing_pubkey carries the "0x" prefix
+		//   - owner is the chain admin address, not the string "root"
+		//   - staking is the wei stake as a JSON number, not a string
+		//   - commission_rate sits BEFORE staking in the object
 		domainEntry := map[string]interface{}{
 			"pubkey":             "0x" + pubkey,
-			"stabilizing_pubkey": blsPubkey,
-			"owner":              "root",
+			"stabilizing_pubkey": "0x" + stripHex0x(blsPubkey),
+			"owner":              g.deploy.AdminAddr,
 			"endpoints":          []string{endpoint},
-			"staking":            "200000000",
 			"commission_rate":    "10",
+			"staking":            domainStakeWei,
 			"node_id":            nodeID,
 		}
-		// Preserve Python's emission order via a manual marshal — Go's
+		// Preserve emission order via a manual marshal — Go's
 		// encoding/json maps alphabetize, which would differ from the
-		// Python output.
+		// Atlantic/v0.13.1 output.
 		entryJSON, err := marshalDomainEntry(domainEntry)
 		if err != nil {
 			return fmt.Errorf("domain %s entry marshal: %w", label, err)
 		}
 		domainsOut.Set(label, entryJSON)
 
-		// 1.5 compute and accumulate per-domain storage slots.
-		domainStakeWei := new(big.Int).Mul(
-			new(big.Int).SetUint64(dc.InitialStakeInGwei),
-			big.NewInt(1_000_000_000),
-		)
+		// 1.6 accumulate per-domain storage slots.
 		domainSlots := GenerateDomainSlots(totalDomains, domainIndex,
 			pubkey, blsPubkey, endpoint, domainStakeWei, pubkeyPop, blsPubkeyPop)
 
@@ -287,12 +296,16 @@ func mergeStorage(acct *Account, src *OrderedStringMap) {
 }
 
 // marshalDomainEntry emits a JSON object for one genesis.domains entry,
-// preserving Python's key insertion order: pubkey, stabilizing_pubkey,
-// owner, endpoints, staking, commission_rate, node_id.
+// preserving the field order that pharos_cli (v0.13.1 / Atlantic) emits:
+//
+//	pubkey, stabilizing_pubkey, owner, endpoints, commission_rate, staking, node_id.
+//
+// Note `commission_rate` comes BEFORE `staking` — diverges from the
+// older Python aldaba-ops layout.
 func marshalDomainEntry(d map[string]interface{}) (json.RawMessage, error) {
 	order := []string{
 		"pubkey", "stabilizing_pubkey", "owner", "endpoints",
-		"staking", "commission_rate", "node_id",
+		"commission_rate", "staking", "node_id",
 	}
 	var buf bytes.Buffer
 	buf.WriteByte('{')
