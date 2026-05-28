@@ -20,9 +20,10 @@ func TestLoadGenesisTemplate(t *testing.T) {
 	if tpl.Configs() == nil {
 		t.Fatal("Configs() is nil")
 	}
-	// v0.13.1 template ships 29 config keys (was 27 in older tpl).
-	if tpl.Configs().Len() != 29 {
-		t.Errorf("Configs.Len = %d, want 29", tpl.Configs().Len())
+	// mirror/master template ships 28 config keys (v0.13.1 had 29 —
+	// consensus.gas_limit_buckets was removed in a later commit).
+	if tpl.Configs().Len() != 28 {
+		t.Errorf("Configs.Len = %d, want 28", tpl.Configs().Len())
 	}
 	if cid, _ := tpl.Configs().Get("chainId"); cid != "35039958" {
 		t.Errorf("chainId = %q, want 35039958", cid)
