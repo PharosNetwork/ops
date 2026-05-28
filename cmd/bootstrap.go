@@ -67,12 +67,18 @@ var bootstrapCmd = &cobra.Command{
 
 		// Run bootstrap genesis command
 		// pharos_cli genesis -c <config_path> -g <genesis_path>
+		// pharos_cli genesis -g <genesis_path> --spec 0
+		// Match the args ab81304 used (the last version known to bootstrap
+		// against Atlantic). Earlier code passed `-c pharos.conf -g
+		// genesis.conf`; that combo triggers an immediate SIGABRT in the
+		// current pharos_cli release build with no useful stderr output.
 		var cmdStr string
 		if hasEvmone {
-			cmdStr = fmt.Sprintf("cd ./bin && LD_PRELOAD=./libevmone.so ./pharos_cli genesis -c %s -g %s", absConfigPath, absGenesisPath)
+			cmdStr = fmt.Sprintf("cd ./bin && LD_PRELOAD=./libevmone.so ./pharos_cli genesis -g %s --spec 0", absGenesisPath)
 		} else {
-			cmdStr = fmt.Sprintf("cd ./bin && ./pharos_cli genesis -c %s -g %s", absConfigPath, absGenesisPath)
+			cmdStr = fmt.Sprintf("cd ./bin && ./pharos_cli genesis -g %s --spec 0", absGenesisPath)
 		}
+		_ = absConfigPath // keep the variable around — bootstrap still validates pharos.conf exists above
 
 		fmt.Printf("Running: %s\n", cmdStr)
 
