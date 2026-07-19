@@ -1,11 +1,15 @@
 package cmd
 
 import (
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"pharos-ops/pkg/bls"
+	"pharos-ops/pkg/keystore"
 
 	"github.com/spf13/cobra"
 )
@@ -13,6 +17,8 @@ import (
 var (
 	generateKeysOutputDir string
 	generateKeysPasswd    string
+	generateKeysLegacy    bool
+	generateKeysKDF       string
 )
 
 var generateKeysCmd = &cobra.Command{
@@ -56,7 +62,11 @@ var generateKeysCmd = &cobra.Command{
 		fmt.Println("Files created:")
 		fmt.Println("  - domain.key (prime256v1 private key)")
 		fmt.Println("  - domain.pub (prime256v1 public key)")
-		fmt.Println("  - stabilizing.key (bls12381 private key)")
+		if generateKeysLegacy {
+			fmt.Println("  - stabilizing.key (bls12381 private key, legacy plaintext)")
+		} else {
+			fmt.Println("  - stabilizing.key (bls12381 private key, EIP-2335 keystore)")
+		}
 		fmt.Println("  - stabilizing.pub (bls12381 public key)")
 		return nil
 	},
@@ -147,18 +157,68 @@ func generateBLS12381Key(outputDir string, passwd string) error {
 		return fmt.Errorf("failed to parse BLS keys from pharos_cli output: prikey=%q, pubkey=%q", prikey, pubkey)
 	}
 
-	// Write keys to files
-	if err := os.WriteFile(blsKeyPath, []byte(prikey), 0600); err != nil {
-		return err
-	}
+	// The public key always keeps the legacy 0x4003-tagged format — the node
+	// reads stabilizing.pub directly and expects that shape.
 	if err := os.WriteFile(blsPubPath, []byte(pubkey), 0644); err != nil {
 		return err
 	}
-
-	fmt.Printf("Generated bls12381 key: %s\n", blsKeyPath)
 	fmt.Printf("Generated bls12381 pub: %s\n", blsPubPath)
 
+	// The private key is written either as a legacy plaintext (0x4002 + hex)
+	// or, by default, as an encrypted EIP-2335 keystore.
+	if generateKeysLegacy {
+		if err := os.WriteFile(blsKeyPath, []byte(prikey), 0600); err != nil {
+			return err
+		}
+		fmt.Printf("Generated bls12381 key (legacy plaintext): %s\n", blsKeyPath)
+		return nil
+	}
+
+	if err := writeBLSKeystore(blsKeyPath, prikey, pubkey, passwd); err != nil {
+		return fmt.Errorf("failed to write EIP-2335 keystore: %w", err)
+	}
+	fmt.Printf("Generated bls12381 key (EIP-2335 keystore): %s\n", blsKeyPath)
 	return nil
+}
+
+// writeBLSKeystore seals the pharos_cli-generated BLS private key as an
+// EIP-2335 keystore. prikey/pubkey are the tagged (0x4002/0x4003) strings from
+// pharos_cli; tags are stripped before encryption. The stored pubkey is the
+// raw 48-byte hex so standard EIP-2335 tooling can read it.
+func writeBLSKeystore(path, prikey, pubkey, passwd string) error {
+	privHex := bls.StripTag(prikey)
+	privBytes, err := hex.DecodeString(privHex)
+	if err != nil {
+		return fmt.Errorf("failed to decode private key hex: %w", err)
+	}
+	if len(privBytes) != bls.SecretKeySize {
+		return fmt.Errorf("private key is %d bytes after stripping tag, expected %d", len(privBytes), bls.SecretKeySize)
+	}
+
+	// Cross-check: the pharos_cli pubkey must match what we derive from the
+	// private key. Guards against a corrupt gen-key output.
+	pubHex := bls.StripTag(pubkey)
+	pubBytes, err := hex.DecodeString(pubHex)
+	if err != nil {
+		return fmt.Errorf("failed to decode public key hex: %w", err)
+	}
+	if err := bls.VerifyKeyPair(privBytes, pubBytes); err != nil {
+		return fmt.Errorf("pharos_cli key pair inconsistent: %w", err)
+	}
+
+	ks, err := keystore.Encrypt(privBytes, passwd, keystore.EncryptOptions{
+		KDF:         generateKeysKDF,
+		Pubkey:      pubHex,
+		Description: "pharos stabilizing (BLS12-381) key",
+	})
+	if err != nil {
+		return err
+	}
+	data, err := ks.Marshal()
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0600)
 }
 
 func init() {
@@ -168,4 +228,8 @@ func init() {
 		"Output directory for generated keys")
 	generateKeysCmd.Flags().StringVar(&generateKeysPasswd, "key-passwd", "",
 		"Password for key encryption (optional, uses saved password if not provided)")
+	generateKeysCmd.Flags().BoolVar(&generateKeysLegacy, "legacy-format", false,
+		"Write stabilizing.key as legacy plaintext (0x4002 hex) instead of an EIP-2335 keystore")
+	generateKeysCmd.Flags().StringVar(&generateKeysKDF, "kdf", "scrypt",
+		"KDF for the EIP-2335 keystore: scrypt or pbkdf2 (ignored with --legacy-format)")
 }
