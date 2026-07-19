@@ -107,7 +107,7 @@ stabilizing.key.legacy. Re-running on an already-migrated key is a no-op.`,
 			KDF:         migrateKDF,
 			Pubkey:      derivedPubHex,
 			Path:        "",
-			Description: "aldaba stabilizing (BLS12-381) key",
+			Description: "pharos stabilizing (BLS12-381) key",
 		})
 		if err != nil {
 			return fmt.Errorf("failed to build keystore: %w", err)

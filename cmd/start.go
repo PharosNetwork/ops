@@ -71,7 +71,7 @@ var startCmd = &cobra.Command{
 		if password != "" {
 			execCmd.Env = append(os.Environ(),
 				fmt.Sprintf("CONSENSUS_KEY_PWD=%s", password),
-				fmt.Sprintf("PORTAL_SSL_PWD=%s", password),
+				fmt.Sprintf("BLS_KEY_PWD=%s", password),
 			)
 		}
 

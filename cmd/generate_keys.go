@@ -209,7 +209,7 @@ func writeBLSKeystore(path, prikey, pubkey, passwd string) error {
 	ks, err := keystore.Encrypt(privBytes, passwd, keystore.EncryptOptions{
 		KDF:         generateKeysKDF,
 		Pubkey:      pubHex,
-		Description: "aldaba stabilizing (BLS12-381) key",
+		Description: "pharos stabilizing (BLS12-381) key",
 	})
 	if err != nil {
 		return err
