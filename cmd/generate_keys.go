@@ -106,20 +106,9 @@ func generateBLS12381Key(outputDir string, passwd string) error {
 		return fmt.Errorf("pharos_cli not found at %s", pharosCli)
 	}
 
-	// Check if libevmone.so exists
-	evmoneSo := "./bin/libevmone.so"
-	hasEvmone := true
-	if _, err := os.Stat(evmoneSo); os.IsNotExist(err) {
-		hasEvmone = false
-	}
-
-	// Generate BLS key using pharos_cli
-	var cmdStr string
-	if hasEvmone {
-		cmdStr = "cd ./bin && LD_PRELOAD=./libevmone.so ./pharos_cli crypto -t gen-key -a bls12381 | tail -n 2"
-	} else {
-		cmdStr = "cd ./bin && ./pharos_cli crypto -t gen-key -a bls12381 | tail -n 2"
-	}
+	// Generate BLS key using pharos_cli.
+	// libevmone is linked into the binaries since v0.14.2, so no LD_PRELOAD.
+	cmdStr := "cd ./bin && ./pharos_cli crypto -t gen-key -a bls12381 | tail -n 2"
 
 	cmd := exec.Command("bash", "-c", cmdStr)
 	output, err := cmd.CombinedOutput()

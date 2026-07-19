@@ -379,9 +379,8 @@ func checkSpecVersion(binDir string) []checkItem {
 
 func checkBinaryVersion(binDir string, network string) checkItem {
 	binaryPath := filepath.Join(binDir, "pharos_light")
-	libPath := filepath.Join(binDir, "libevmone.so")
+	// libevmone is linked into the binary since v0.14.2, so no LD_PRELOAD.
 	cmdExec := exec.Command(binaryPath, "--version")
-	cmdExec.Env = append(os.Environ(), fmt.Sprintf("LD_PRELOAD=%s", libPath))
 
 	out, err := cmdExec.CombinedOutput()
 	if err != nil {

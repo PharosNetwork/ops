@@ -49,13 +49,6 @@ var bootstrapCmd = &cobra.Command{
 			return fmt.Errorf("pharos_cli binary not found: %s", pharosCli)
 		}
 
-		// Check if libevmone.so exists
-		evmoneSo := "./bin/libevmone.so"
-		hasEvmone := true
-		if _, err := os.Stat(evmoneSo); os.IsNotExist(err) {
-			hasEvmone = false
-		}
-
 		// Get password and set environment variable
 		password, err := GetPassword()
 		if err != nil {
@@ -67,12 +60,8 @@ var bootstrapCmd = &cobra.Command{
 
 		// Run bootstrap genesis command
 		// pharos_cli genesis -c <config_path> -g <genesis_path>
-		var cmdStr string
-		if hasEvmone {
-			cmdStr = fmt.Sprintf("cd ./bin && LD_PRELOAD=./libevmone.so ./pharos_cli genesis -c %s -g %s", absConfigPath, absGenesisPath)
-		} else {
-			cmdStr = fmt.Sprintf("cd ./bin && ./pharos_cli genesis -c %s -g %s", absConfigPath, absGenesisPath)
-		}
+		// libevmone is linked into the binaries since v0.14.2, so no LD_PRELOAD.
+		cmdStr := fmt.Sprintf("cd ./bin && ./pharos_cli genesis -c %s -g %s", absConfigPath, absGenesisPath)
 
 		fmt.Printf("Running: %s\n", cmdStr)
 

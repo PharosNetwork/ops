@@ -37,13 +37,6 @@ var startCmd = &cobra.Command{
 			return fmt.Errorf("pharos_light binary not found: %s", pharosLight)
 		}
 
-		// Check if libevmone.so exists
-		evmoneSo := "./bin/libevmone.so"
-		hasEvmone := true
-		if _, err := os.Stat(evmoneSo); os.IsNotExist(err) {
-			hasEvmone = false
-		}
-
 		// Get password and set environment variable
 		password, err := GetPassword()
 		if err != nil {
@@ -54,12 +47,8 @@ var startCmd = &cobra.Command{
 		}
 
 		// Build command
-		var cmdStr string
-		if hasEvmone {
-			cmdStr = fmt.Sprintf("cd ./bin && LD_PRELOAD=./libevmone.so ./pharos_light -c %s -d", absConfigPath)
-		} else {
-			cmdStr = fmt.Sprintf("cd ./bin && ./pharos_light -c %s -d", absConfigPath)
-		}
+		// libevmone is linked into the binaries since v0.14.2, so no LD_PRELOAD.
+		cmdStr := fmt.Sprintf("cd ./bin && ./pharos_light -c %s -d", absConfigPath)
 
 		fmt.Printf("Starting pharos_light: %s\n", cmdStr)
 
