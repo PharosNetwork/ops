@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -8,6 +9,13 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+)
+
+// An uncompressed P-256 point is 65 bytes: 0x04 followed by 32-byte X and Y coordinates.
+// Hex encoding makes it 130 characters.
+const (
+	p256UncompressedPointHexPrefix     = "04"
+	p256UncompressedPublicKeyHexLength = 130
 )
 
 var (
@@ -76,13 +84,23 @@ func generatePrime256v1Key(outputDir string, passwd string) error {
 	}
 	fmt.Printf("Generated prime256v1 private key: %s\n", keyPath)
 
+	if _, err := exec.LookPath("xxd"); err != nil {
+		return fmt.Errorf("xxd is required to extract the domain public key: %w", err)
+	}
+
 	// Extract public key in hex format (without 0x prefix)
 	// openssl ec -in domain.key -passin pass:123abc -pubout -outform DER | tail -c 65 | xxd -p -c 65
-	extractPubCmd := fmt.Sprintf("openssl ec -in %s -passin pass:%s -pubout -outform DER 2>/dev/null | tail -c 65 | xxd -p -c 65 | tr -d '\\n'", keyPath, passwd)
+	extractPubCmd := fmt.Sprintf("set -o pipefail; openssl ec -in %s -passin pass:%s -pubout -outform DER 2>/dev/null | tail -c 65 | xxd -p -c 65 | tr -d '\\n'", keyPath, passwd)
 	pubCmd := exec.Command("bash", "-c", extractPubCmd)
 	pubOutput, err := pubCmd.Output()
 	if err != nil {
 		return fmt.Errorf("failed to extract public key: %w", err)
+	}
+	if len(pubOutput) != p256UncompressedPublicKeyHexLength || !strings.HasPrefix(string(pubOutput), p256UncompressedPointHexPrefix) {
+		return fmt.Errorf("invalid P-256 public key output: expected %d hex characters beginning with %s, got %d", p256UncompressedPublicKeyHexLength, p256UncompressedPointHexPrefix, len(pubOutput))
+	}
+	if _, err := hex.DecodeString(string(pubOutput)); err != nil {
+		return fmt.Errorf("invalid P-256 public key hex: %w", err)
 	}
 
 	// Add prefix "1003" to public key
